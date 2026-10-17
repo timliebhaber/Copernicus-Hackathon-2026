@@ -39,7 +39,7 @@ def open_stream(prefix, years=None, region="iceland"):
     return xr.open_mfdataset(files, combine="by_coords", parallel=False)
 
 
-def site_mask(ds, site, radius_km=config.SITE_RADIUS_KM, fallback_km=30):
+def site_mask(ds, site, radius_km=config.SITE_RADIUS_KM, fallback_km=30, ocean=None):
     """Boolean (lat, lon) mask of ocean pixels within radius of a site.
 
     Fjord sites often have no 4 km / 9 km ocean pixel within 10 km, so fall back
@@ -50,8 +50,9 @@ def site_mask(ds, site, radius_km=config.SITE_RADIUS_KM, fallback_km=30):
     dy = (lat - site["lat"]) * 111.2
     dx = (lon - site["lon"]) * 111.2 * np.cos(np.radians(site["lat"]))
     dist = np.hypot(dx, dy)
-    first = ds[list(ds.data_vars)[0]]
-    ocean = np.isfinite(first.squeeze()).any("time").values
+    if ocean is None:
+        first = ds[list(ds.data_vars)[0]]
+        ocean = np.isfinite(first.squeeze()).any("time").values
     m = ocean & (dist <= radius_km)
     if m.sum() == 0:
         d = np.where(ocean, dist, np.inf)
@@ -61,16 +62,16 @@ def site_mask(ds, site, radius_km=config.SITE_RADIUS_KM, fallback_km=30):
     return m
 
 
-def add_coords(df, site_col="site"):
+def add_coords(df, site_col="site", kind_col="kind"):
     """Insert lat, lon and kind of each point (from config.POINTS) right after the site column.
 
     These are the site / station coordinates (approximate placeholders); values are averages of
     the ocean pixels around that point (see site_mask).
     """
     pts = {p["name"]: p for p in config.POINTS}
-    df = df.drop(columns=[c for c in ("lat", "lon", "kind") if c in df.columns])
+    df = df.drop(columns=[c for c in ("lat", "lon", kind_col) if c in df.columns])
     i = df.columns.get_loc(site_col) + 1
     df.insert(i, "lat", df[site_col].map(lambda s: pts.get(s, {}).get("lat")))
     df.insert(i + 1, "lon", df[site_col].map(lambda s: pts.get(s, {}).get("lon")))
-    df.insert(i + 2, "kind", df[site_col].map(lambda s: pts.get(s, {}).get("kind")))
+    df.insert(i + 2, kind_col, df[site_col].map(lambda s: pts.get(s, {}).get("kind")))
     return df

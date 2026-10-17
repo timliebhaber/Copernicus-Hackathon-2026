@@ -26,7 +26,8 @@ def documented(events, blooms):
     needed = {"coccolithophore": "rrs555", "high-biomass": "chl"}
     docs = pd.read_csv(config.ROOT / "validation" / "documented_events.csv", parse_dates=["start", "end"])
     for _, d in docs.iterrows():
-        sites = d.sites.split(";")
+        areas = d.areas.split(";")  # fjord areas (config.AREA_OF); every farm point in them counts
+        sites = [p for p, a in config.AREA_OF.items() if a in areas or p in areas]
         lo, hi = d.start - pd.Timedelta(days=WINDOW_DAYS), d.end + pd.Timedelta(days=WINDOW_DAYS)
         col = needed.get(d.kind, "chl")
         covered = series[(series.site.isin(sites)) & series.date.between(lo, hi)]

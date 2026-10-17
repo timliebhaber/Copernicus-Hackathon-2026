@@ -2,116 +2,90 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>AlgaeWatch Iceland</title>
+  <meta name="description" content="Algal blooms at Iceland's fish and shellfish farms: satellite data, past blooms and a 3–7 day forecast.">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
-  <header class="topbar">
-    <div class="brand">
-      <strong>AlgaeWatch Iceland</strong>
-      <span class="muted">Satellite view of algal blooms around Iceland</span>
+<body data-mode="data">
+  <div id="map" aria-label="Map of Iceland"></div>
+
+  <!-- top left: brand + modes -->
+  <header class="topleft">
+    <div class="brand glass">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c3.5 4 6 7.2 6 10.2A6 6 0 0 1 6 13.2C6 10.2 8.5 7 12 3Z"/><path d="M9.5 14.5c.4 1.3 1.4 2.2 2.8 2.4"/></svg>
+      <span>AlgaeWatch</span>
     </div>
-    <nav class="tabs" aria-label="Sections">
-      <button class="tab active" data-tab="data">Data</button>
-      <button class="tab" data-tab="blooms">Blooms</button>
-      <button class="tab" data-tab="forecast">Forecast</button>
-      <button class="tab" data-tab="model">Model</button>
+    <nav class="modes glass" role="tablist" aria-label="View">
+      <button role="tab" data-mode="data" aria-selected="true">
+        <svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4Z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/></svg>Ocean data</button>
+      <button role="tab" data-mode="past" aria-selected="false">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>Past blooms</button>
+      <button role="tab" data-mode="forecast" aria-selected="false">
+        <svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 3 8-8"/><path d="M15 7h5v5"/></svg>Forecast</button>
     </nav>
+    <button class="glass pillbtn" id="howBtn">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1.1.9-1.1 1.6v.5"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg><span>How it works</span></button>
+    <div class="cursor glass" id="cursor" aria-live="polite"><span id="cursorPos">Move over the sea</span><span id="cursorVal"></span></div>
   </header>
 
-  <main class="layout">
-    <section class="mapwrap">
-      <div id="map"></div>
 
-      <div class="card layers" id="layerCard">
-        <label for="layerSelect" class="label">Map layer</label>
-        <select id="layerSelect"></select>
-        <label class="check"><input type="checkbox" id="fjordToggle" checked> Fjord detail (300 m)</label>
-        <label class="check"><input type="checkbox" id="farmToggle" checked> Licensed farm sites (MAST)</label>
-        <div class="seg only-forecast-card" role="group" aria-label="Forecast horizon" id="horizonSeg">
-          <button class="on" data-h="3">Next 3 days</button><button data-h="7">Next 7 days</button>
-        </div>
-        <div id="legend" class="legend"></div>
-        <div id="layerNote" class="note"></div>
-      </div>
+  <!-- top right: find a farm -->
+  <div class="search glass" id="searchBox">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+    <input id="search" type="search" placeholder="Find a farm" autocomplete="off" aria-label="Find a farm">
+    <kbd>⌘K</kbd>
+    <ul id="searchResults" role="listbox"></ul>
+  </div>
 
-      <div class="card timebar">
-        <button id="playBtn" class="btn" aria-label="Play">▶</button>
-        <button id="prevBtn" class="btn" aria-label="Previous day">‹</button>
-        <input type="range" id="dateSlider" min="0" max="0" value="0" aria-label="Date">
-        <button id="nextBtn" class="btn" aria-label="Next day">›</button>
-        <input type="date" id="datePicker" aria-label="Pick date">
-      </div>
-    </section>
+  <!-- right rail: map controls -->
+  <div class="rail glass">
+    <button id="zoomIn" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
+    <button id="zoomOut" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+    <button id="home" aria-label="Show all of Iceland"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  </div>
 
-    <aside class="panel" id="panel" data-tab="data">
-      <div id="panelEmpty" class="empty">
-        <h2 class="only-data only-blooms only-forecast">Pick a site</h2>
-        <p class="only-forecast">Bloom-risk forecast issued on the selected date. Each year's forecasts come from a model trained only on <b>earlier</b> years, so replaying a past date shows what the system would really have said. Click a site for details.</p>
-        <p class="only-data">Click a fjord marker on the map to see its daily chlorophyll, algae groups, sea temperature and weather.</p>
-        <div class="only-blooms">
-          <p>Click a fjord marker to see its bloom history. A <b>bloom</b> is when chlorophyll is at least <b>2.5× the normal</b> level for that place and time of year (median <span class="baselineYears">of all years</span>) <b>and</b> at least 3 mg/m³, on ≥10% of the sea within 10 km.</p>
-          <p class="small muted">Markers turn red with “· bloom” on days a bloom is detected. Each event is labelled with algae type (from the satellite algae-group product, 2016+) and confidence (high = seen by a real cloud-free observation; low = murky water such as Hvalfjörður).</p>
-        </div>
-        <div class="kindkey only-forecast">
-          <span><i class="dot lvl-low"></i> Low bloom risk (&lt; 30%)</span>
-          <span><i class="dot lvl-medium"></i> Medium (30–60%)</span>
-          <span><i class="dot lvl-high"></i> High (&gt; 60%) · bigger marker</span>
-        </div>
-        <div class="kindkey only-data only-blooms only-model">
-          <span><i class="dot salmon"></i> Salmon farming fjord</span>
-          <span><i class="dot shellfish"></i> Shellfish area (toxin monitoring)</span>
-          <span class="only-blooms"><i class="dot hafro"></i> Hafró toxic-algae station (2005–2019 samples)</span>
-          <span><i class="dot farm sea"></i> Licensed sea-pen site (MAST)</span>
-          <span><i class="dot farm shellfish"></i> Licensed shellfish site (MAST)</span>
-          <span><i class="dot farm land"></i> Land-based farm (MAST)</span>
-        </div>
-        <p class="muted small">The large markers are <b>analysis points</b> (mid-fjord, approximate): data is averaged over the sea within 10 km of them. The small markers are the <b>licensed farm sites</b> from the MAST register; click one to see its licence and which analysis area covers it.</p>
-        <div id="overview" class="only-blooms"></div>
-        <div id="forecastList" class="only-forecast"></div>
-        <div id="modelInfo" class="only-model"></div>
-      </div>
-      <div id="panelSite" hidden>
-        <div class="panelhead">
-          <div>
-            <h2 id="siteName"></h2>
-            <div class="muted small" id="siteMeta"></div>
-          </div>
-          <button class="btn" id="closePanel" aria-label="Close">✕</button>
-        </div>
-        <div class="stats" id="stats"></div>
-        <div id="forecastSite" class="only-forecast only-model"></div>
-        <div id="farmInfo" class="only-data only-blooms block"></div>
-        <div id="toxicInfo" class="only-blooms block"></div>
-        <div id="eventList" class="only-blooms block"></div>
-        <div class="seg only-data only-blooms" role="group" aria-label="Chart window">
-          <button class="on" data-window="season">6 months around date</button>
-          <button data-window="all">All of 2023–2024</button>
-        </div>
-        <div id="charts" class="only-data only-blooms"></div>
-        <div class="only-blooms">
-          <div id="siteCalendar" class="block"></div>
-          <div class="block">
-            <h3>Spring bloom timing per year</h3>
-            <div class="sub" id="phenoNote"></div>
-            <div class="lgd"><span><i style="background:var(--series-1)"></i>Bloom start</span><span><i style="background:var(--series-2)"></i>Bloom peak</span></div>
-            <div class="canvas" style="height:160px"><canvas id="phenoCanvas"></canvas></div>
-          </div>
-        </div>
-      </div>
-    </aside>
-  </main>
+  <!-- left panel: changes with the mode -->
+  <aside class="left glass" id="left"></aside>
 
-  <footer class="disclaimer">
-    Prototype. Shows high-biomass blooms from satellite chlorophyll, not toxicity. Toxic species (Dinophysis, Alexandrium, Pseudo-nitzschia) are only detected by
-    <a href="https://www.hafogvatn.is/is/rannsoknir/voktun-eiturthorunga" target="_blank" rel="noopener">Hafró/MAST water sampling</a>.
-    Not for operational decisions. Data: Copernicus Marine, Open-Meteo (ERA5); farm sites: Matvælastofnun (MAST).
+  <!-- right: the selected farm -->
+  <aside class="card glass" id="card" hidden></aside>
+
+  <!-- bottom right: legend -->
+  <div class="legend glass" id="legend"></div>
+
+  <!-- bottom: time -->
+  <footer class="timebar glass" id="timebar">
+    <div class="tcontrols">
+      <button id="prev" aria-label="Previous day"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <button id="play" class="playbtn" aria-label="Play"><svg viewBox="0 0 24 24" class="i-play"><path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/></svg><svg viewBox="0 0 24 24" class="i-pause"><path d="M8 5v14M16 5v14"/></svg></button>
+      <button id="next" aria-label="Next day"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+      <button id="speed" class="speed" aria-label="Playback speed">1×</button>
+    </div>
+    <div class="tdate"><div id="dateBig">–</div><div id="dateSub" class="muted"></div></div>
+    <div class="track" id="track">
+      <svg id="strip" preserveAspectRatio="none"></svg>
+      <input type="range" id="slider" min="0" max="244" value="0" aria-label="Day">
+      <div class="months" id="months"></div>
+    </div>
+    <div class="tyear">
+      <button id="yPrev" aria-label="Previous year"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <span id="year">–</span>
+      <button id="yNext" aria-label="Next year"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    </div>
   </footer>
 
+  <!-- how it works -->
+  <dialog id="how" aria-labelledby="howTitle">
+    <button class="close" id="howClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <h1 id="howTitle">How AlgaeWatch works</h1>
+    <p class="lede">Three steps, all from free Copernicus satellite and ocean data.</p>
+    <div class="steps" id="howSteps"></div>
+    <p class="fine">Prototype for a hackathon. A "bloom" here means a lot of algae (high biomass), seen as chlorophyll. Toxic species (Dinophysis, Alexandrium, Pseudo-nitzschia) are too few to see from space; only Hafró/MAST water samples can find them. Not for operational decisions. Data: Copernicus Marine, Open-Meteo (ERA5), Matvælastofnun (MAST farm register), Hafró.</p>
+  </dialog>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

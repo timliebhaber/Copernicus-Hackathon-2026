@@ -51,21 +51,91 @@ FIRST_YEAR, LAST_YEAR = int(START_DATE[:4]), int(END_DATE[:4])
 
 HORIZONS = [3, 7]
 
-# APPROXIMATE PLACEHOLDER farm locations (mid-fjord points), not real licence coordinates.
-SITES = [
-    # salmon farming fjords
-    {"name": "Seyðisfjörður", "kind": "salmon", "lat": 65.27, "lon": -13.90},
-    {"name": "Reyðarfjörður", "kind": "salmon", "lat": 65.02, "lon": -13.95},
-    {"name": "Fáskrúðsfjörður", "kind": "salmon", "lat": 64.93, "lon": -13.85},
-    {"name": "Berufjörður", "kind": "salmon", "lat": 64.72, "lon": -14.25},
-    {"name": "Arnarfjörður", "kind": "salmon", "lat": 65.75, "lon": -23.45},
-    {"name": "Dýrafjörður", "kind": "salmon", "lat": 65.90, "lon": -23.55},
-    {"name": "Patreksfjörður", "kind": "salmon", "lat": 65.57, "lon": -24.05},
-    # shellfish areas monitored for toxic algae (Hafró/MAST)
-    {"name": "Breiðafjörður", "kind": "shellfish", "lat": 65.10, "lon": -22.80},
-    {"name": "Hvalfjörður", "kind": "shellfish", "lat": 64.37, "lon": -21.60},
+# 300 m (OLCI) chlorophyll boxes, +-0.2 deg lat / +-0.45 deg lon around these centres (fjord detail).
+# Files are named chl300_<slug>_<region>_<year>.nc; farms inside a box use its 300 m data.
+CHL300_BOXES = [
+    {"name": "Seyðisfjörður", "lat": 65.27, "lon": -13.90},
+    {"name": "Reyðarfjörður", "lat": 65.02, "lon": -13.95},
+    {"name": "Fáskrúðsfjörður", "lat": 64.93, "lon": -13.85},
+    {"name": "Berufjörður", "lat": 64.72, "lon": -14.25},
+    {"name": "Arnarfjörður", "lat": 65.75, "lon": -23.45},
+    {"name": "Dýrafjörður", "lat": 65.90, "lon": -23.55},
+    {"name": "Patreksfjörður", "lat": 65.57, "lon": -24.05},
+    {"name": "Breiðafjörður", "lat": 65.10, "lon": -22.80},
+    {"name": "Hvalfjörður", "lat": 64.37, "lon": -21.60},
 ]
-SITES_ARE_PLACEHOLDERS = True
+CHL300_HALF = (0.2, 0.45)
+
+# Licensed aquaculture sites from MAST's register. FARMS_DB is filled by
+# ../aquaculture-data/fetch_aquaculture_is.py; src/import_farms.py turns it into FARMS_FILE.
+# Data: Matvælastofnun (MAST).
+FARMS_DB = ROOT.parent / "aquaculture-data" / "aquaculture_is.db"
+FARMS_FILE = ROOT / "reference" / "mast_farms.geojson"
+AREA_LINK_KM = 12   # farms closer than this (chained) form one "area", e.g. a fjord
+# readable names for areas whose farms have no fjord in the register (keyed by a member farm)
+AREA_NAMES = {"Tilraunaleyfi - Reitur 1": "Breiðafjörður (inner)", "Hofstaðavogur I": "Breiðafjörður (Stykkishólmur)",
+              "Grímsey I": "Breiðafjörður (islands)", "Reitur 1": "Breiðafjörður (Reykhólar)",
+              "Neseyjar": "Breiðafjörður (Reykhólar)", "Hvítanes": "Hvalfjörður", "Birgidalsá": "Steingrímsfjörður",
+              "Rauðanes - Svæði í notkun til söfnunar á skel með plóg": "Borgarfjörður"}
+
+
+def _km(a, b):
+    import math
+    dy = (a["lat"] - b["lat"]) * 111.2
+    dx = (a["lon"] - b["lon"]) * 111.2 * math.cos(math.radians((a["lat"] + b["lat"]) / 2))
+    return math.hypot(dx, dy)
+
+
+def farms_from_features(features):
+    """Marine farms (sea pens + shellfish, licence not expired) as analysis points.
+
+    Each farm gets a unique point name and an "area": farms chained within AREA_LINK_KM,
+    named after their most common fjord (or the farm name without its number)."""
+    import re
+    from collections import Counter
+    rows = [f["properties"] for f in features
+            if f["properties"].get("category") in ("sea", "shellfish") and f["properties"].get("status") != "expired"]
+    seen = Counter(r["name"] for r in rows)
+    farms = []
+    for r in rows:
+        name = r["name"] if seen[r["name"]] == 1 else f"{r['name']} ({r['licence']})"
+        farms.append({"name": name, "kind": r["category"], "lat": r["lat"], "lon": r["lon"],
+                      "farm": r["name"], "company": r.get("company"), "licence": r.get("licence"),
+                      "fjord": r.get("fjord"), "region": r.get("region"), "species": r.get("species"),
+                      "biomass_limit_t": r.get("biomass_limit_t"), "in_use": r.get("in_use"),
+                      "status": r.get("status")})
+    # single-linkage clustering into areas
+    parent = list(range(len(farms)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i in range(len(farms)):
+        for j in range(i + 1, len(farms)):
+            if _km(farms[i], farms[j]) <= AREA_LINK_KM:
+                parent[root(i)] = root(j)
+    groups = {}
+    for i, f in enumerate(farms):
+        groups.setdefault(root(i), []).append(f)
+    for members in groups.values():
+        fj = Counter(m["fjord"] for m in members if m["fjord"]).most_common(1)
+        named = [AREA_NAMES[m["farm"]] for m in members if m["farm"] in AREA_NAMES]
+        area = named[0] if named else fj[0][0] if fj else re.sub(r"[\s\d]+$|\s+[IVX]+$", "", members[0]["farm"]).strip()
+        for m in members:
+            m["area"] = area
+    return farms
+
+
+def _load_farms():
+    import json
+    if not FARMS_FILE.exists():
+        return []
+    return farms_from_features(json.loads(FARMS_FILE.read_text())["features"])
+
+
+FARMS = _load_farms()
 
 # Hafró toxic-algae monitoring stations (voktun.hafro.is, 2005-2019), used as labels.
 # Coordinates are APPROXIMATE (named sampling places, not GPS).
@@ -78,15 +148,12 @@ HAFRO_STATIONS = [
     {"name": "Steingrímsfjörður", "page": "steing", "kind": "hafro", "lat": 65.72, "lon": -21.55},
     {"name": "Þistilfjörður", "page": "thistil", "kind": "hafro", "lat": 66.20, "lon": -15.40},
 ]
-# every point we extract time series for: farm sites + Hafró stations
-POINTS = SITES + HAFRO_STATIONS
+for _st in HAFRO_STATIONS:
+    _st["area"] = _st["name"]
+# every point we extract time series for: the licensed marine farms + Hafró stations (labels)
+POINTS = FARMS + HAFRO_STATIONS
+AREA_OF = {p["name"]: p["area"] for p in POINTS}
 SITE_RADIUS_KM = 10
-
-# Licensed aquaculture sites from MAST's register (sea pens, shellfish, land farms), shown on the map.
-# FARMS_DB is filled by ../aquaculture-data/fetch_aquaculture_is.py; src/import_farms.py turns it into
-# FARMS_FILE (same for both profiles). Data: Matvælastofnun (MAST).
-FARMS_DB = ROOT.parent / "aquaculture-data" / "aquaculture_is.db"
-FARMS_FILE = ROOT / "reference" / "mast_farms.geojson"
 
 # Bloom detection
 BLOOM_PERCENTILE = 95      # chl above this percentile of the pixel's 1998-2022 values for the date ...

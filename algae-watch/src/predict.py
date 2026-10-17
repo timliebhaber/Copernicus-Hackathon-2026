@@ -35,7 +35,7 @@ def level(p):
     return np.where(p >= config.RISK_HIGH, "high", np.where(p >= config.RISK_LOW, "medium", "low"))
 
 
-def top_factors(model, X, k=3):
+def top_factors(model, X, k=4):
     """Top k features pushing each prediction UP, as JSON strings [{feature, value}]."""
     contrib = model.predict(X, pred_contrib=True)[:, :-1]  # last column is the bias
     names = [tb.LABELS.get(c, c) for c in X.columns]
@@ -43,7 +43,7 @@ def top_factors(model, X, k=3):
     out = []
     for row, vals in zip(contrib, X.values):
         order = np.argsort(row)[::-1][:k]
-        out.append(json.dumps([{"feature": names[i], "push": round(float(row[i]), 3),
+        out.append(json.dumps([{"key": X.columns[i], "feature": names[i], "push": round(float(row[i]), 3),
                                 "value": None if not np.isfinite(vals[i]) else round(float(vals[i]), 3)}
                                for i in order if row[i] > 0]))
     return out

@@ -2,12 +2,17 @@
 
 An early-warning prototype for **algal blooms around Iceland**. It is built on Copernicus satellite and ocean-model data and aimed at salmon farms, shellfish growers and authorities (MAST, Hafró).
 
-The web app shows:
-- **Data:** daily maps and per-fjord time series of chlorophyll, algae groups, sea temperature, mixed-layer depth, waves and weather.
-- **Blooms:** detected bloom events from 1998 to 2025, each with an algae type and a confidence level, plus the spring-bloom timing for each year.
-- **Model / Forecast:** coming next. This will be a 3–7 day bloom-risk forecast per site.
+Everything is organised around the **82 licensed marine farms** in MAST's register: 56 sea-pen sites and 27 shellfish sites, minus one expired licence. Each farm is an analysis point (the sea within 10 km of it). Neighbouring farms are grouped into 15 areas, such as Arnarfjörður or Ísafjarðardjúp.
 
-> Prototype. The app detects **high-biomass blooms**, using satellite chlorophyll as the signal; it cannot measure toxicity. Toxic species (*Dinophysis*, *Alexandrium*, *Pseudo-nitzschia*) are only detected by Hafró/MAST water sampling. Do not use it for operational decisions. The analysis points are approximate placeholder points (mid-fjord), not licensed farm coordinates; the real licensed sites from the MAST register are drawn on the map alongside them.
+The web app has three modes:
+- **Ocean data:** pick one forecast input (chlorophyll, clear-sky chlorophyll, chlorophyll vs normal, sea temperature, salinity, surface-layer depth, currents, waves, milky water). Only that layer is drawn, with its value under the cursor. Click a farm to see all inputs at that farm, each with a 60-day sparkline.
+- **Past blooms:** the detected blooms day by day. A farm **pulses** when a bloom reaches it: red for a chlorophyll bloom, blue for milky water. The farm card shows **how we know**: the bloom test applied on the bloom's peak day, check by check, plus the farm's bloom history since 1998.
+- **Forecast:** bloom risk at each farm for the next 3 and 7 days. The farm card shows **why**, in plain language, and **how sure we are**: for example, "when we say 60–80%, a bloom followed 69% of the time" (from past forecasts). It also shows what really happened afterwards.
+- **How it works:** a three-step explainer covering what we measure, the bloom rule and the forecast with its test scores.
+
+Design: a full-screen ocean map with dark glass panels, a timeline with an activity strip, a farm search (⌘K) and keyboard controls (←/→ step a day, space plays). Deep links work, e.g. `/?mode=past&date=2022-09-05&farm=Haganes`.
+
+> Prototype. The app detects **high-biomass blooms**, using satellite chlorophyll as the signal; it cannot measure toxicity. Toxic species (*Dinophysis*, *Alexandrium*, *Pseudo-nitzschia*) are only detected by Hafró/MAST water sampling. Shellfish farms show the typical monthly share of toxic Hafró samples instead. Do not use it for operational decisions.
 
 ## Which blooms matter in Iceland
 
@@ -71,7 +76,7 @@ All gains are statistically significant. For brand-new blooms, precision is stil
 | Nutrients, oxygen, primary production (model) | `cmems_mod_glo_bgc_my_0.25deg_P1D-m` | 0.25° | 2016–2025 |
 | Waves | `cmems_mod_glo_wav_my_0.2deg_PT3H-i` | 0.2°, 3-hourly | 2016–2025 |
 | Surface salinity (observations) | `cmems_obs-mob_glo_phy-sss_my_multi_P1D` | 0.125° | 2016–2025 |
-| Weather (wind, sunlight, air temperature, rain) | Open-Meteo archive (ERA5) | ~25 km | 1998–2025 |
+| Weather (wind, sunlight, air temperature, rain) | Open-Meteo archive (ERA5), fetched once per 0.25° grid cell | ~25 km | 1998–2025 |
 | Licensed aquaculture sites (sea pens, shellfish, land farms) | MAST register, WFS `geoserver.mast.is` (not Copernicus) | licence polygons / points | current |
 
 The Atlantic 1 km ocean-colour products stop at 66.0°N, which would cut off the north coast and the Westfjords, so this project uses the global products. Note that the ocean-colour dataset version `202603` is scheduled to be retired on 2026-11-24.
@@ -109,7 +114,7 @@ Prefix each command with `ALGAE_PROFILE=sample` to work on the sample instead.
 ```bash
 .venv/bin/python src/download_copernicus.py                 # ~8 GB; cached; --streams/--years to limit
 .venv/bin/python src/download_copernicus.py --streams chl300
-.venv/bin/python src/download_weather.py --start 1998-01-01 --end 2025-12-31
+.venv/bin/python src/download_weather.py --start 1998-01-01 --end 2025-12-31   # --offline: reuse nearest cached cell
 .venv/bin/python src/build_site_series.py                   # per-site daily series
 .venv/bin/python src/detect_blooms.py                       # climatology, bloom events, phenology
 .venv/bin/python src/import_farms.py                        # licensed farm sites -> reference/mast_farms.geojson; --refresh re-downloads
@@ -140,3 +145,9 @@ data/                raw NetCDF + processed parquet/PNG (gitignored)
 - Zhai, L. et al. (2012). Phytoplankton phenology and production around Iceland and Faroes. *Cont. Shelf Res.* 37:15–25.
 - Guðmundsson, K. et al. (2016). A regional correction model for satellite surface chlorophyll concentrations, based on measurements from sea water samples collected around Iceland. *Methods in Oceanography* 17:83–96.
 - Hafró, toxic algae monitoring: https://www.hafogvatn.is/is/rannsoknir/voktun-eiturthorunga
+
+### Notes on the farm-based run
+- Open-Meteo has a daily quota. 24 of the 33 weather grid cells currently borrow the nearest already-downloaded series (`--offline`): at most 53 km away, usually under 30 km. Rerun without `--offline` on another day to fill them in.
+- 300 m fjord chlorophyll is available for 49 of the 89 points (farms inside the nine 300 m boxes); the others use 4 km data only.
+- Validation with farms: Hafró's Sep 2022 Westfjords coccolithophore bloom is detected as **confirmed** at 12 Arnarfjörður/Dýrafjörður farms from 3 Sep 2022. The spring 2021 losses show a confirmed bloom at two Arnarfjörður farms from 2 May 2021.
+- Bloom forecast with farms (test 2019–2025, 148,527 farm-days): ROC-AUC 0.85 for 3 days and 0.80 for 7 days, against 0.74/0.69 for persistence and 0.62/0.63 for seasonal. The bootstrap resamples whole area-years, because farms in one fjord share the same water.

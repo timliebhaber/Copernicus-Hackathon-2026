@@ -181,8 +181,9 @@ def label_events(b, s):
             if turbid.get(site, False):
                 reasons.append("murky water")
             status = "confirmed" if not reasons else "candidate"
-            if status == "confirmed":
-                df.loc[e.index, "is_bloom"] = True
+            if status == "confirmed":  # every day from start to end is "in a bloom" (short cloudy dips included)
+                span = df[(df.site == site) & df.date.between(e.date.min(), e.date.max())].index
+                df.loc[span, "is_bloom"] = True
             btype, shares = bloom_type(e)
             events.append({
                 "site": site, "kind": "high-biomass", "start": e.date.min(), "end": e.date.max(), "days": days,
@@ -268,7 +269,8 @@ def main():
     keep = ["date", "site", "chl", "chl_clim", "chl_threshold", "chl_anomaly_ratio", "bloom_fraction", "valid_fraction",
             "candidate_bloom", "is_bloom", "observed_bloom", "cocco_day", "is_cocco"]
     common.add_coords(df[keep]).to_parquet(config.PROCESSED / "blooms.parquet", index=False)
-    common.add_coords(ev).to_parquet(config.PROCESSED / "bloom_events.parquet", index=False)
+    # events have their own "kind" (high-biomass / coccolithophore): the farm type goes in "site_kind"
+    common.add_coords(ev, kind_col="site_kind").to_parquet(config.PROCESSED / "bloom_events.parquet", index=False)
     ph = fit_phenology(df)
     common.add_coords(ph).to_parquet(config.PROCESSED / "phenology.parquet", index=False)
 

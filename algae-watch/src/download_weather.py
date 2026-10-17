@@ -42,22 +42,41 @@ def main():
     ap.add_argument("--region", default="iceland")
     ap.add_argument("--start", default=config.START_DATE)
     ap.add_argument("--end", default=config.END_DATE)
+    ap.add_argument("--offline", action="store_true",
+                    help="no downloads: give each grid cell the nearest already-downloaded series (Open-Meteo has a daily quota)")
     a = ap.parse_args()
     out = config.RAW / f"weather_{a.region}_{a.start[:4]}_{a.end[:4]}.parquet"
     if out.exists():
         print(f"[cached] {out.name}")
         return
-    frames = []
-    for s in config.POINTS:
-        part = config.RAW / f".weather_{s['lat']}_{s['lon']}_{a.start}_{a.end}.parquet"
+    # ERA5 is a 0.25 deg grid: fetch each grid cell once and give it to every point inside
+    cells = {}
+    for p in config.POINTS:
+        cells.setdefault((round(p["lat"] * 4) / 4, round(p["lon"] * 4) / 4), []).append(p["name"])
+    print(f"{len(config.POINTS)} points in {len(cells)} weather grid cells", flush=True)
+    cached = {}
+    for f in config.RAW.glob(f".weather_*_{a.start}_{a.end}.parquet"):
+        parts = f.name.split("_")
+        cached[(float(parts[-4]), float(parts[-3]))] = f
+    frames, borrowed = [], []
+    for (lat, lon), names in cells.items():
+        part = config.RAW / f".weather_cell_{lat}_{lon}_{a.start}_{a.end}.parquet"
         if part.exists():
-            frames.append(pd.read_parquet(part))
-            continue
-        print(f"[weather] {s['name']}", flush=True)
-        df = fetch_site(s, a.start, a.end)
-        df.to_parquet(part, index=False)
-        frames.append(df)
-        time.sleep(5)
+            df = pd.read_parquet(part)
+        elif a.offline:
+            near = min(cached, key=lambda c: config._km({"lat": lat, "lon": lon}, {"lat": c[0], "lon": c[1]}))
+            dist = config._km({"lat": lat, "lon": lon}, {"lat": near[0], "lon": near[1]})
+            borrowed.append((lat, lon, round(dist), len(names)))
+            df = pd.read_parquet(cached[near]).drop(columns=["site"], errors="ignore")
+        else:
+            print(f"[weather] cell {lat},{lon} ({len(names)} points)", flush=True)
+            df = fetch_site({"lat": lat, "lon": lon, "name": ""}, a.start, a.end).drop(columns=["site"])
+            df.to_parquet(part, index=False)
+            time.sleep(5)
+        for n in names:
+            frames.append(df.assign(site=n))
+    if borrowed:
+        print(f"borrowed nearest weather for {len(borrowed)} cells (lat, lon, km away, points):", borrowed)
     pd.concat(frames).to_parquet(out, index=False)
     print(f"saved {out}")
 

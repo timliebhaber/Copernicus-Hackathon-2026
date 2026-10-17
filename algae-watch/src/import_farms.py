@@ -1,8 +1,9 @@
 """Licensed aquaculture sites (MAST register) -> GeoJSON for the web app.
 
 Reads the active rows of the SQLite database written by ../aquaculture-data/fetch_aquaculture_is.py,
-keeps the useful fields (in English, without the operators' ID numbers), and links each farm to the
-nearest analysis point (config.POINTS) within config.SITE_RADIUS_KM, i.e. the area whose data applies.
+keeps the useful fields (in English, without the operators' ID numbers). Every marine farm (sea pens,
+shellfish) is its own analysis point (config.FARMS); "point" is its unique name in the data tables and
+"area" groups neighbouring farms (e.g. a fjord).
 Output: reference/mast_farms.geojson (same for both profiles). Data: Matvælastofnun (MAST).
 Usage: python src/import_farms.py [--refresh] [--db PATH]
 """
@@ -14,7 +15,6 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config  # noqa: E402
@@ -24,24 +24,11 @@ FARMING = {"Sjókvíaeldi": "sea pens", "Landeldi með frárennsli í sjó": "la
            "Landeldi með frárennsli í ferskvatn": "land-based, outflow to freshwater"}
 
 
-def km(lat0, lon0, lat1, lon1):
-    dy = (lat1 - lat0) * 111.2
-    dx = (lon1 - lon0) * 111.2 * np.cos(np.radians((lat0 + lat1) / 2))
-    return float(np.hypot(dx, dy))
-
-
-def nearest_point(lat, lon):
-    best = min(config.POINTS, key=lambda p: km(lat, lon, p["lat"], p["lon"]))
-    d = km(lat, lon, best["lat"], best["lon"])
-    return (best["name"], round(d, 1)) if d <= config.SITE_RADIUS_KM else (None, round(d, 1))
-
-
 def feature(row):
     category, company, lat, lon, geom, props = row
     p = json.loads(props)
     licences = json.loads(p.get("lisense_json") or "[]")
     species = sorted({x["Species"] for x in licences if x.get("Species")})
-    area, dist = nearest_point(lat, lon)
     return {"type": "Feature", "geometry": json.loads(geom), "properties": {
         "category": category,
         "name": p.get("SiteName") or p.get("Description") or company,
@@ -56,7 +43,6 @@ def feature(row):
         "species": species or None,
         "valid_until": (p.get("ValidUntil") or "")[:10] or None,
         "lat": lat, "lon": lon,
-        "analysis_site": area, "analysis_km": dist,
     }}
 
 
@@ -80,6 +66,13 @@ def main():
                        "WHERE active = 1 AND in_bounds = 1 ORDER BY category, lat").fetchall()
     con.close()
     feats = [feature(r) for r in rows]
+    # analysis point name + area for every marine farm (same logic the pipeline uses)
+    points = iter(config.farms_from_features(feats))
+    for f in feats:
+        pr = f["properties"]
+        marine = pr["category"] in ("sea", "shellfish") and pr["status"] != "expired"
+        pt = next(points) if marine else None
+        pr["point"], pr["area"] = (pt["name"], pt["area"]) if pt else (None, None)
 
     config.FARMS_FILE.parent.mkdir(parents=True, exist_ok=True)
     config.FARMS_FILE.write_text(json.dumps({
@@ -89,12 +82,8 @@ def main():
     print(f"saved {config.FARMS_FILE}: {len(feats)} sites",
           dict(Counter(f["properties"]["category"] for f in feats)))
 
-    linked = Counter(f["properties"]["analysis_site"] for f in feats if f["properties"]["analysis_site"])
-    for p in config.POINTS:
-        print(f"  {p['name']:<26} {linked.get(p['name'], 0):3d} farm sites within {config.SITE_RADIUS_KM} km")
-    marine = [f["properties"] for f in feats if f["properties"]["category"] != "land"]
-    loose = Counter(f["fjord"] or f["region"] for f in marine if not f["analysis_site"])
-    print(f"  sea/shellfish sites outside every analysis area: {sum(loose.values())}", dict(loose.most_common()))
+    areas = Counter(f["properties"]["area"] for f in feats if f["properties"]["area"])
+    print(f"  {sum(areas.values())} marine farms in {len(areas)} areas:", dict(areas.most_common()))
 
 
 if __name__ == "__main__":

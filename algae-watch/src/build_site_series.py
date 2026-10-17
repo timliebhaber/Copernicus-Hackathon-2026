@@ -50,12 +50,14 @@ def stream_site_means(prefix, radius, varmap, valid_col):
     for f in files:
         ds = xr.open_dataset(f)
         if masks is None:
-            masks = {s["name"]: common.site_mask(ds, s, radius_km=radius) for s in config.POINTS}
+            ocean = np.isfinite(ds[list(varmap)[0]].values.reshape(len(ds.time), *ds[list(varmap)[0]].shape[-2:])).any(axis=0)
+            masks = {s["name"]: common.site_mask(ds, s, radius_km=radius, ocean=ocean) for s in config.POINTS}
         t = pd.to_datetime(ds.time.values)
+        arrays = {var: ds[var].values.reshape(len(t), *ds[var].shape[-2:]) for var in varmap}  # load once
         for name, m in masks.items():
             cols = {}
             for var, col in varmap.items():
-                v = ds[var].squeeze().values[:, m]
+                v = arrays[var][:, m]
                 cols[col] = np.nanmean(v, axis=1)
                 if valid_col and col == list(varmap.values())[0]:
                     cols[valid_col] = np.isfinite(v).mean(axis=1)
@@ -73,10 +75,21 @@ def stream_site_means(prefix, radius, varmap, valid_col):
     return out.reset_index().set_index(["site", "date"])
 
 
+def chl300_box(p):
+    """The 300 m box (config.CHL300_BOXES) that contains this point, if any."""
+    hy, hx = config.CHL300_HALF
+    inside = [b for b in config.CHL300_BOXES if abs(p["lat"] - b["lat"]) < hy * 0.9 and abs(p["lon"] - b["lon"]) < hx * 0.9]
+    return min(inside, key=lambda b: config._km(p, b)) if inside else None
+
+
 def chl300_means():
-    frames = []
+    frames, covered = [], 0
     for s in config.POINTS:
-        files = sorted(config.RAW.glob(f"chl300_{common.slug(s['name'])}_iceland_[0-9][0-9][0-9][0-9].nc"))
+        box = chl300_box(s)
+        if box is None:
+            continue
+        covered += 1
+        files = sorted(config.RAW.glob(f"chl300_{common.slug(box['name'])}_iceland_[0-9][0-9][0-9][0-9].nc"))
         for f in files:
             ds = xr.open_dataset(f)
             m = common.site_mask(ds, s, radius_km=5)
@@ -90,7 +103,7 @@ def chl300_means():
         return None
     out = pd.concat(frames)
     out.index.name = "date"
-    print(f"  chl300: {len(frames)} site-years")
+    print(f"  chl300: {covered} of {len(config.POINTS)} points inside a 300 m box")
     return out.reset_index().set_index(["site", "date"])
 
 

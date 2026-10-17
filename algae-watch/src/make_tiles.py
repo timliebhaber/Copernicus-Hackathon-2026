@@ -55,24 +55,41 @@ def bloom(ds):
     return out, np.isfinite(c).any(axis=(1, 2))  # also report which days had data
 
 
+BLOOMCM = LinearSegmentedColormap.from_list("bloom", ["#ffb38a", "#ff5a5f", "#d4145a", "#7a0177"])
+MILKY = LinearSegmentedColormap.from_list("milky", ["#0b3c5d", "#1b7f9e", "#4fd1c5", "#c6f7f0", "#ffffff"])
+
+
+def phys(var):
+    return lambda ds: ds[var].values
+
+
+def current_speed(ds):
+    return np.hypot(ds["uo"].values, ds["vo"].values)
+
+
 LAYERS = {
-    "chl": dict(file="chl_l4", get=chl, cmap="Greens", norm=LogNorm(0.1, 20), units="mg/m³",
-                label="Chlorophyll-a (gap-free, 4 km)", ticks=[0.1, 0.3, 1, 3, 10, 20]),
+    "chl": dict(file="chl_l4", get=chl, cmap="viridis", norm=LogNorm(0.1, 20), units="mg/m³",
+                label="Chlorophyll", ticks=[0.1, 0.3, 1, 3, 10, 20]),
     "anomaly": dict(file="chl_l4", get=anomaly, cmap=DIVERGING, norm=LogNorm(0.25, 4), units="× normal",
-                    label="Chlorophyll vs normal for the date", ticks=[0.25, 0.5, 1, 2, 4]),
-    "bloom": dict(file="chl_l4", get=bloom, cmap="Reds", norm=LogNorm(config.BLOOM_RATIO, 10), units="× normal",
-                  label=f"Bloom pixels (above {config.BLOOM_PERCENTILE}th percentile, ≥{config.BLOOM_RATIO}× normal, ≥{config.BLOOM_MIN_CHL:g} mg/m³)",
-                  ticks=[2.5, 4, 6, 10]),
-    "chl_obs": dict(file="pft_l3", get=chl, cmap="Greens", norm=LogNorm(0.1, 20), units="mg/m³",
-                    label="Chlorophyll-a (observed only, 4 km)", ticks=[0.1, 0.3, 1, 3, 10, 20]),
-    "sst": dict(file="sst_ostia", get=lambda ds: ds["analysed_sst"].values - 273.15, cmap="Oranges",
-                norm=Normalize(0, 14), units="°C", label="Sea surface temperature (OSTIA satellite)",
-                ticks=[0, 2, 4, 6, 8, 10, 12, 14]),
-    "rrs555": dict(file="rrs_l3", get=lambda ds: ds["RRS555"].values, cmap="Blues", norm=Normalize(0, 0.012),
-                   units="sr⁻¹", label="Reflectance 555 nm (milky water / coccolithophores)",
-                   ticks=[0, 0.003, 0.006, 0.009, 0.012]),
+                    label="Chlorophyll vs normal", ticks=[0.25, 0.5, 1, 2, 4]),
+    "bloom": dict(file="chl_l4", get=bloom, cmap=BLOOMCM, norm=LogNorm(config.BLOOM_RATIO, 10), units="× normal",
+                  label="Bloom", ticks=[2.5, 4, 6, 10]),
+    "chl_obs": dict(file="pft_l3", get=chl, cmap="viridis", norm=LogNorm(0.1, 20), units="mg/m³",
+                    label="Chlorophyll (clear-sky only)", ticks=[0.1, 0.3, 1, 3, 10, 20]),
+    "sst": dict(file="sst_ostia", get=lambda ds: ds["analysed_sst"].values - 273.15, cmap="turbo",
+                norm=Normalize(0, 14), units="°C", label="Sea temperature", ticks=[0, 2, 4, 6, 8, 10, 12, 14]),
+    "salinity": dict(file="phys", get=phys("so"), cmap="cividis", norm=Normalize(33, 35.4), units="PSU",
+                     label="Salinity", ticks=[33, 34, 35]),
+    "mixed_layer": dict(file="phys", get=phys("mlotst"), cmap="Blues", norm=LogNorm(5, 300), units="m",
+                        label="Mixed-layer depth", ticks=[5, 10, 30, 100, 300]),
+    "currents": dict(file="phys", get=current_speed, cmap="magma", norm=Normalize(0, 0.5), units="m/s",
+                     label="Current speed", ticks=[0, 0.1, 0.2, 0.3, 0.4, 0.5]),
+    "waves": dict(file="waves", get=phys("VHM0"), cmap="PuBu", norm=Normalize(0, 6), units="m",
+                  label="Wave height", ticks=[0, 2, 4, 6], daily=True),
+    "rrs555": dict(file="rrs_l3", get=lambda ds: ds["RRS555"].values, cmap=MILKY, norm=Normalize(0, 0.012),
+                   units="sr⁻¹", label="Milky water", ticks=[0, 0.004, 0.008, 0.012]),
 }
-CHL300 = dict(cmap="Greens", norm=LogNorm(0.1, 20), units="mg/m³",
+CHL300 = dict(cmap="viridis", norm=LogNorm(0.1, 20), units="mg/m³",
               label="Chlorophyll-a (300 m, fjords, observed only)", ticks=[0.1, 0.3, 1, 3, 10, 20])
 
 
@@ -90,7 +107,7 @@ def mercator_rows(lats, n_out):
 def render(arr, cmap, norm):
     cm = colormaps[cmap] if isinstance(cmap, str) else cmap
     rgba = cm(norm(np.clip(arr, norm.vmin, norm.vmax)))
-    rgba[..., 3] = np.where(np.isfinite(arr), 0.85, 0.0)
+    rgba[..., 3] = np.where(np.isfinite(arr), 0.9, 0.0)
     return Image.fromarray((rgba * 255).astype(np.uint8), "RGBA")
 
 
@@ -139,7 +156,7 @@ def legend(spec):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--layers", default="chl,anomaly,bloom,chl_obs,sst,rrs555,chl300")
+    ap.add_argument("--layers", default=",".join(list(LAYERS) + ["chl300"]))
     a = ap.parse_args()
     wanted = a.layers.split(",")
     mf = TILES / "manifest.json"
@@ -152,6 +169,8 @@ def main():
         dates, bnds = [], None
         for f in yearly(spec["file"]):
             ds = xr.open_dataset(f)
+            if spec.get("daily"):
+                ds = ds.resample(time="1D").mean()
             bnds = bnds or bounds(ds)
             v = spec["get"](ds)
             has = None
@@ -164,7 +183,7 @@ def main():
 
     if "chl300" in wanted:
         sites = {}
-        for s in config.SITES:
+        for s in config.CHL300_BOXES:
             sl = common.slug(s["name"])
             dates, bnds = [], None
             for f in yearly(f"chl300_{sl}"):

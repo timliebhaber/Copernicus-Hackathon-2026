@@ -1,796 +1,662 @@
-// AlgaeWatch Iceland: data explorer (Step 2) + blooms (Step 3)
-const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-const $ = (id) => document.getElementById(id);
+// AlgaeWatch Iceland: algal blooms at Iceland's licensed fish and shellfish farms.
+// Modes: Ocean data (one input on the map) · Past blooms (detected blooms, farms pulse when hit)
+//        · Forecast (bloom risk per farm, why, and how sure we are).
+"use strict";
 
-const state = {
-  manifest: null, sites: [], dates: [], idx: 0, layer: "chl",
-  site: null, series: null, charts: [], playing: null, snapshot: {}, window: "season", windowRange: [0, 0],
-  tab: "data", events: [], phenology: [], calendar: null, horizon: 3, fc: {}, fcSeries: null, metrics: null,
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
+const api = (path) => fetch(path).then((r) => { if (!r.ok) throw new Error(`${path}: ${r.status}`); return r.json(); });
+
+const S = {
+  mode: "forecast", layer: "chl", horizon: 3, fjord: true,
+  cfg: null, farms: [], byName: {}, year: null, date: null, days: [],
+  day: {}, prevDay: {}, timeline: null, farm: null, farmData: null, conf: null,
+  playing: null, speed: 1, layerDates: {},
 };
 
-// ---------- map ----------
-const map = L.map("map", { zoomControl: true, attributionControl: true }).setView([65.0, -19.0], 6);
-const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-const esri = (n) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/${n}/MapServer/tile/{z}/{y}/{x}`;
-L.tileLayer(esri(dark ? "World_Dark_Gray_Base" : "World_Light_Gray_Base"), {
-  maxZoom: 16, attribution: "Tiles &copy; Esri | Data: Copernicus Marine, Open-Meteo",
-}).addTo(map);
-L.tileLayer(esri(dark ? "World_Dark_Gray_Reference" : "World_Light_Gray_Reference"), { maxZoom: 16, pane: "shadowPane" }).addTo(map);
+const LAYER_ORDER = ["chl", "chl_obs", "anomaly", "sst", "salinity", "mixed_layer", "currents", "waves", "rrs555"];
+const ICONS = {
+  chl: '<path d="M5 19c0-8 6-14 14-14 0 8-6 14-14 14Z"/><path d="M5 19l8-8"/>',
+  chl_obs: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  anomaly: '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
+  sst: '<path d="M10 14V5a2 2 0 1 1 4 0v9a4 4 0 1 1-4 0Z"/><path d="M12 10v6"/>',
+  salinity: '<path d="M12 3c3.5 4 6 7.2 6 10.2A6 6 0 0 1 6 13.2C6 10.2 8.5 7 12 3Z"/>',
+  mixed_layer: '<path d="M3 7l9-4 9 4-9 4-9-4Z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/>',
+  currents: '<path d="M3 8h14l-3-3"/><path d="M21 16H7l3 3"/>',
+  waves: '<path d="M2 15c2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2 2.5 2 5 2"/><path d="M2 9c2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2 2.5 2 5 2"/>',
+  rrs555: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
+};
+const icon = (k, cls = "") => `<svg viewBox="0 0 24 24" class="${cls}">${ICONS[k] || ""}</svg>`;
+const FMT = {
+  chl: (v) => `${v.toFixed(v < 1 ? 2 : 1)} mg/m³`, chl_obs: (v) => `${v.toFixed(v < 1 ? 2 : 1)} mg/m³`,
+  anomaly: (v) => `${v.toFixed(1)}× normal`, bloom: (v) => `${v.toFixed(1)}× normal`, sst: (v) => `${v.toFixed(1)} °C`,
+  salinity: (v) => `${v.toFixed(2)} PSU`, mixed_layer: (v) => `${Math.round(v)} m deep`, currents: (v) => `${v.toFixed(2)} m/s`,
+  waves: (v) => `${v.toFixed(1)} m`, rrs555: (v) => `${v.toFixed(4)} sr⁻¹${v >= 0.008 ? " · milky" : ""}`,
+};
+const LEVEL_COLOR = { low: "var(--low)", medium: "var(--medium)", high: "var(--high)" };
 
-map.createPane("farms").style.zIndex = 450;  // above the data overlays ...
-map.createPane("sites").style.zIndex = 460;  // ... and below the analysis-point markers
+// ---------------- dates ----------------
+const iso = (d) => d.toISOString().slice(0, 10);
+const seasonDays = (y) => { const out = []; for (let d = new Date(Date.UTC(y, 2, 1)); d <= new Date(Date.UTC(y, 9, 31)); d.setUTCDate(d.getUTCDate() + 1)) out.push(iso(d)); return out; };
+const fmtDay = (s, opt = { day: "numeric", month: "long", year: "numeric" }) => new Date(s + "T00:00:00Z").toLocaleDateString("en-GB", { ...opt, timeZone: "UTC" });
+const fmtShort = (s) => fmtDay(s, { day: "numeric", month: "short", year: "numeric" });
+const addDays = (s, n) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
 
-let regionOverlay = null;
+// ---------------- map ----------------
+const map = L.map("map", { zoomControl: false, minZoom: 5, maxZoom: 13, worldCopyJump: false, zoomSnap: 0.5 })
+  .setView([64.95, -19.0], 6.5);
+const esriOcean = (n) => `https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/${n}/MapServer/tile/{z}/{y}/{x}`;
+map.createPane("labels").style.zIndex = 450;
+map.getPane("labels").style.pointerEvents = "none";
+L.tileLayer(esriOcean("World_Ocean_Base"), { maxZoom: 13, attribution: "Esri, GEBCO · Copernicus Marine · MAST" }).addTo(map);
+L.tileLayer(esriOcean("World_Ocean_Reference"), { maxZoom: 13, pane: "labels" }).addTo(map);
+const HOME = [[63.2, -25.2], [66.8, -12.8]];
+
+let overlay = null;
 const fjordOverlays = {};
 const markers = {};
+let polygons = null;
 
-function allDates() {
-  const out = [];
-  const [y0, y1] = state.manifest.years || [2023, 2024];
-  const d = new Date(Date.UTC(y0, 0, 1));
-  const end = new Date(Date.UTC(y1, 11, 31));
-  for (; d <= end; d.setUTCDate(d.getUTCDate() + 1)) out.push(d.toISOString().slice(0, 10));
-  return out;
+function overlayKey() {
+  if (S.mode === "data") return S.layer;
+  if (S.mode === "past") return "bloom";
+  return null;
 }
 
-function currentDate() { return state.dates[state.idx]; }
-
-function fmtDate(s) {
-  return new Date(s + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-}
-
-// ---------- layers ----------
-function buildLayerSelect() {
-  const sel = $("layerSelect");
-  const order = { blooms: ["bloom", "anomaly", "chl"], forecast: ["anomaly", "bloom", "chl", "sst"],
-                  model: ["bloom", "anomaly", "chl"] }[state.tab] || ["chl", "chl_obs", "sst", "rrs555"];
-  if (!order.includes(state.layer)) state.layer = order[0];
-  sel.innerHTML = order.filter((k) => state.manifest.layers[k])
-    .map((k) => `<option value="${k}">${state.manifest.layers[k].label}</option>`).join("");
-  sel.value = state.layer;
-  sel.onchange = () => { state.layer = sel.value; renderLegend(); updateMap(); };
-  $("fjordToggle").onchange = updateMap;
-}
-
-function renderLegend() {
-  const L_ = state.manifest.layers[state.layer];
-  const pos = (v) => L_.log
-    ? (Math.log(v) - Math.log(L_.min)) / (Math.log(L_.max) - Math.log(L_.min))
-    : (v - L_.min) / (L_.max - L_.min);
-  const grad = L_.stops.map((s, i) => `${s.c} ${(i / (L_.stops.length - 1)) * 100}%`).join(",");
-  $("legend").innerHTML = `
-    <div class="title">${L_.label} <span class="muted">(${L_.units})</span></div>
-    <div class="bar" style="background:linear-gradient(90deg,${grad})"></div>
-    <div class="ticks">${L_.ticks.map((t) => `<span style="left:${pos(t) * 100}%">${t}</span>`).join("")}</div>`;
-}
-
-function updateMap() {
-  const d = currentDate();
-  const L_ = state.manifest.layers[state.layer];
-  const has = L_.dates.includes(d);
-  const url = `/tiles/${state.layer}/${d}.png`;
+function updateOverlay() {
+  const key = overlayKey();
+  const L_ = key && S.cfg.layers[key];
+  const has = L_ && S.layerDates[key]?.has(S.date);
   if (has) {
-    if (!regionOverlay) regionOverlay = L.imageOverlay(url, L_.bounds, { opacity: 1 }).addTo(map);
-    else { regionOverlay.setBounds(L.latLngBounds(L_.bounds)); regionOverlay.setUrl(url); }
-    regionOverlay.setOpacity(1);
-  } else if (regionOverlay) regionOverlay.setOpacity(0);
-
-  const month = +d.slice(5, 7);
-  const note = $("layerNote");
-  if (!has) {
-    note.className = "note warn";
-    note.textContent = (month >= 11 || month <= 1) && state.layer !== "sst"
-      ? "No ocean-colour data: polar night (Nov–Jan), satellites can't see the sea."
-      : "No data for this day.";
-  } else {
-    note.className = "note";
-    note.textContent = state.layer === "chl_obs" || state.layer === "rrs555"
-      ? "Observed pixels only. Gaps are clouds."
-      : state.layer === "bloom" ? "Coloured pixels are blooms. Empty sea means no bloom (data present)." : "";
-  }
-
-  // 300 m fjord detail on top (chlorophyll layers only)
-  const showFjord = $("fjordToggle").checked && state.layer.startsWith("chl");
-  refreshMarkers();
-  const F = state.manifest.layers.chl300;
-  for (const [slug, info] of Object.entries(F ? F.sites : {})) {
-    const ok = showFjord && info.dates.includes(d);
-    const u = `/tiles/chl300/${slug}/${d}.png`;
+    const url = `/tiles/${key}/${S.date}.png`;
+    if (!overlay) overlay = L.imageOverlay(url, L_.bounds, { opacity: 0.95, interactive: false }).addTo(map);
+    else { overlay.setBounds(L.latLngBounds(L_.bounds)); overlay.setUrl(url); }
+    overlay.setOpacity(0.95);
+  } else if (overlay) overlay.setOpacity(0);
+  // 300 m fjord detail on top of chlorophyll
+  const F = S.cfg.chl300;
+  const showFjord = S.mode === "data" && S.fjord && (key === "chl" || key === "chl_obs");
+  for (const [slug, info] of Object.entries(F?.sites || {})) {
+    const ok = showFjord && info.dates.includes(S.date);
+    const u = `/tiles/chl300/${slug}/${S.date}.png`;
     if (ok) {
-      if (!fjordOverlays[slug]) fjordOverlays[slug] = L.imageOverlay(u, info.bounds, { opacity: 1 }).addTo(map);
+      if (!fjordOverlays[slug]) fjordOverlays[slug] = L.imageOverlay(u, info.bounds, { interactive: false }).addTo(map);
       else fjordOverlays[slug].setUrl(u).setOpacity(1);
     } else if (fjordOverlays[slug]) fjordOverlays[slug].setOpacity(0);
   }
-  preload(state.idx + 1);
+  renderLegend(key, has);
+  preloadNext(key);
 }
 
-function preload(i) {
-  const d = state.dates[i];
-  if (!d) return;
-  if (state.manifest.layers[state.layer].dates.includes(d)) new Image().src = `/tiles/${state.layer}/${d}.png`;
+function preloadNext(key) {
+  if (!key) return;
+  const i = S.days.indexOf(S.date);
+  for (const d of S.days.slice(i + 1, i + 4)) if (S.layerDates[key]?.has(d)) new Image().src = `/tiles/${key}/${d}.png`;
 }
 
-// ---------- sites ----------
-const kindColor = (k) => css(k === "salmon" ? "--series-1" : k === "shellfish" ? "--series-2" : "--series-3");
-const LABEL_DIR = { "Reyðarfjörður": "left", "Fáskrúðsfjörður": "right", "Dýrafjörður": "top", "Patreksfjörður": "left",
-  "Seyðisfjörður": "top", "Mjóifjörður eystri": "right", "Breiðafjörður": "top", "Breiðafjörður (Kiðey)": "bottom",
-  "Hvalfjörður (Eyrarkot)": "left", "Steingrímsfjörður": "right", "Stakksfjörður": "bottom" };
-function drawSites() {
-  for (const s of state.sites) {
-    const color = kindColor(s.kind);
-    const m = L.circleMarker([s.lat, s.lon], {
-      radius: s.kind === "hafro" ? 6 : 8, color: css("--marker-ring"), weight: 2, fillColor: color, fillOpacity: 1, pane: "sites",
-    });
-    if (s.kind !== "hafro") m.addTo(map);
-    const dir = LABEL_DIR[s.name] || "right";
-    const off = { right: [8, 0], left: [-8, 0], bottom: [0, 8], top: [0, -8] }[dir];
-    m.bindTooltip(s.name, { permanent: true, direction: dir, offset: off, className: "sitelabel" });
-    m.on("click", () => openSite(s));
-    m.on("mouseover", () => {
-      const v = state.snapshot[s.name] || {};
-      const f = (x, d = 2) => (x == null ? "–" : x.toFixed(d));
-      m.unbindPopup();
-      const status = v.is_bloom ? `<b style="color:${css("--critical")}">● Bloom detected</b> (${f(v.chl_anomaly_ratio, 1)}× normal)<br>`
-        : v.is_cocco ? `<b style="color:${css("--critical")}">● Milky water (coccolithophores)</b><br>` : "";
-      m.bindPopup(`<b>${s.name}</b> · ${fmtDate(currentDate())}<br>${status}
-        Chlorophyll: ${f(v.chl)} mg/m³ (300 m: ${f(v.chl_300m)})<br>
-        Sea temp: ${f(v.sst, 1)} °C`, { closeButton: false, autoPan: false }).openPopup();
-    });
-    m.on("mouseout", () => m.closePopup());
-    markers[s.name] = m;
+// ---------------- farm markers ----------------
+function farmIcon(f, cls) {
+  return L.divIcon({ className: "", iconSize: [14, 14], iconAnchor: [7, 7],
+    html: `<div class="farm ${f.kind} ${cls}"><span class="ring"></span><span class="core"></span></div>` });
+}
+
+function farmStateClass(f) {
+  const d = S.day[f.name] || {};
+  if (S.mode === "past") return d.milky && !d.bloom ? "milky" : d.bloom ? "bloom" : d.data ? "" : "nodata";
+  if (S.mode === "forecast") {
+    const lv = d[`level_${S.horizon}d`];
+    return lv ? `risk-${lv}` : "nodata";
   }
+  return "";
 }
 
-function refreshMarkers() {
-  for (const s of state.sites) {
-    const m = markers[s.name];
-    if (!m) continue;
-    if (s.kind === "hafro") {  // Hafró stations on the Blooms and Forecast tabs
-      const show = state.tab === "blooms" || state.tab === "forecast";
-      if (show && !map.hasLayer(m)) m.addTo(map);
-      if (!show && map.hasLayer(m)) map.removeLayer(m);
-    }
-    if (state.tab === "forecast") {
-      const f = state.fc[s.name];
-      const r0 = s.kind === "hafro" ? 6 : 8;
-      if (!f) { m.setStyle({ fillColor: css("--axis"), radius: r0 }); m.setTooltipContent(s.name); continue; }
-      const risk = f[`risk_${state.horizon}d`];
-      const lv = f[`level_${state.horizon}d`];
-      const tox = s.kind === "hafro" && f.toxic_risk_7d != null ? ` · toxic ${Math.round(f.toxic_risk_7d * 100)}%` : "";
-      m.setStyle({ fillColor: css(`--lvl-${lv}`), radius: r0 + (lv === "high" ? 4 : lv === "medium" ? 2 : 0) });
-      m.setTooltipContent(`${s.name} · ${Math.round(risk * 100)}%${tox}`);
-      continue;
-    }
-    const v = state.snapshot[s.name] || {};
-    const bloom = state.tab === "blooms" && v.is_bloom;
-    const cocco = state.tab === "blooms" && v.is_cocco;
-    const r0 = s.kind === "hafro" ? 6 : 8;
-    m.setStyle({ fillColor: bloom || cocco ? css("--critical") : kindColor(s.kind), radius: bloom || cocco ? r0 + 3 : r0 });
-    m.setTooltipContent(bloom ? `${s.name} · bloom` : cocco ? `${s.name} · milky water` : s.name);
+function farmTip(f) {
+  const d = S.day[f.name] || {};
+  let line = "";
+  if (S.mode === "past") line = d.bloom ? `<span style="color:var(--bloom)">● In a bloom</span>${d.ratio ? ` · ${d.ratio.toFixed(1)}× normal` : ""}`
+    : d.milky ? `<span style="color:var(--milky)">● Milky-water bloom</span>` : d.data ? "No bloom" : "No satellite data";
+  if (S.mode === "forecast") line = d[`risk_${S.horizon}d`] != null
+    ? `Bloom risk next ${S.horizon} days: <b style="color:${LEVEL_COLOR[d[`level_${S.horizon}d`]]}">${pct(d[`risk_${S.horizon}d`])}</b>` : "No forecast this day";
+  return `<b>${esc(f.farm)}</b><br><span class="m">${esc(f.company || "")} · ${esc(f.area)}</span>${line ? `<br>${line}` : ""}`;
+}
+
+function drawFarms() {
+  for (const f of S.farms) {
+    const m = L.marker([f.lat, f.lon], { icon: farmIcon(f, ""), keyboard: false, riseOnHover: true, zIndexOffset: 500 }).addTo(map);
+    m.bindTooltip(() => farmTip(f), { className: "farmtip", direction: "top", offset: [0, -8], opacity: 1 });
+    m.on("click", () => openFarm(f.name));
+    markers[f.name] = m;
   }
-}
-
-// ---------- licensed farm sites (MAST register) ----------
-const esc = (x) => String(x ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const farmColor = (c) => css(c === "sea" ? "--series-1" : c === "shellfish" ? "--series-2" : "--muted");
-const FARM_KIND = { sea: "Sea-pen site", shellfish: "Shellfish site", land: "Land-based farm" };
-let farmLayer = null;
-
-function farmPopup(p) {
-  const row = (k, v) => (v == null || v === "" ? "" : `<span class="k">${k}:</span> ${esc(v)}<br>`);
-  const area = p.analysis_site
-    ? `Data from analysis area <a href="#" data-open="${esc(p.analysis_site)}">${esc(p.analysis_site)}</a> (${p.analysis_km} km)`
-    : `<span class="k">Not covered by an analysis area (nearest is ${p.analysis_km} km away)</span>`;
-  return `<div class="farmpop"><b>${esc(p.name)}</b><br>${esc(p.company)}<br>
-    ${row("Type", FARM_KIND[p.category] + (p.category === "land" && p.farming ? ` (${p.farming})` : ""))}
-    ${row("Fjord", p.fjord)}${row("Licence", [p.licence, p.status].filter(Boolean).join(", "))}
-    ${row("In use", p.in_use == null ? null : p.in_use ? "yes" : "no")}
-    ${row("Biomass limit", p.biomass_limit_t ? `${p.biomass_limit_t.toLocaleString("en")} t` : null)}
-    ${row("Species", p.species?.join(", "))}${area}</div>`;
-}
-
-async function drawFarms() {
-  const fc = await fetch("/api/farms").then((r) => r.json()).catch(() => ({ features: [] }));
-  state.farms = fc.features.map((f) => f.properties);
-  farmLayer = L.layerGroup();
-  for (const f of fc.features) {
-    const p = f.properties, color = farmColor(p.category);
-    // licence polygons are small, so each site also gets a dot that stays visible when zoomed out
-    const dot = L.circleMarker([p.lat, p.lon], { pane: "farms", radius: 4, color: css("--marker-ring"), weight: 1, fillColor: color, fillOpacity: 1 });
-    const shape = f.geometry.type === "Point" ? null
-      : L.geoJSON(f.geometry, { pane: "farms", style: { color, weight: 1.5, fillColor: color, fillOpacity: 0.2 } });
-    for (const l of [dot, shape].filter(Boolean)) {
-      l.bindPopup(farmPopup(p)).bindTooltip(esc(p.name), { direction: "top", offset: [0, -4] });
-      farmLayer.addLayer(l);
-    }
-  }
-  const toggle = () => ($("farmToggle").checked ? farmLayer.addTo(map) : farmLayer.remove());
-  $("farmToggle").onchange = toggle;
-  toggle();
-}
-
-map.on("popupopen", (e) => e.popup.getElement().querySelectorAll("[data-open]").forEach((a) => a.onclick = (ev) => {
-  ev.preventDefault();
-  const s = state.sites.find((x) => x.name === a.dataset.open);
-  if (s) { map.closePopup(); openSite(s); }
-}));
-
-function renderFarms() {
-  const s = state.site, box = $("farmInfo");
-  const list = (state.farms || []).filter((p) => p.analysis_site === s.name).sort((a, b) => a.analysis_km - b.analysis_km);
-  if (s.kind === "hafro" && !list.length) { box.innerHTML = ""; return; }
-  box.innerHTML = `<h3>Licensed farm sites in this area (${list.length})</h3>
-    <div class="sub">From the MAST register: sites within 10 km of this point, so the data shown here applies to them. Click one to show it on the map.</div>` +
-    (list.length ? `<ul class="farmlist">${list.map((p, i) => `<li data-farm="${i}"><i class="dot farm ${p.category}"></i><b>${esc(p.name)}</b> · ${esc(p.company)} · ${FARM_KIND[p.category].toLowerCase()}${p.in_use === false ? " · not in use" : ""}</li>`).join("")}</ul>`
-      : `<div class="sub">No licensed farm site within 10 km of this point.</div>`);
-  box.querySelectorAll("[data-farm]").forEach((li) => li.onclick = () => {
-    const p = list[+li.dataset.farm];
-    map.setView([p.lat, p.lon], Math.max(map.getZoom(), 11));
+  const feats = S.farms.filter((f) => f.geometry).map((f) => ({ type: "Feature", geometry: f.geometry, properties: { name: f.name } }));
+  polygons = L.geoJSON({ type: "FeatureCollection", features: feats }, {
+    style: { color: "#ffffff", weight: 1.2, opacity: 0.8, fillColor: "#ffffff", fillOpacity: 0.08 },
+    onEachFeature: (ft, layer) => layer.on("click", () => openFarm(ft.properties.name)),
   });
+  const syncPolys = () => (map.getZoom() >= 10 ? polygons.addTo(map) : polygons.remove());
+  map.on("zoomend", syncPolys);
+  syncPolys();
 }
 
-async function loadSnapshot() {
-  const d = currentDate();
-  try { state.snapshot = await (await fetch(`/api/snapshot?date=${d}`)).json(); } catch { state.snapshot = {}; }
-  refreshMarkers();
+function updateMarkers() {
+  for (const f of S.farms) {
+    const m = markers[f.name];
+    const el = m.getElement()?.firstElementChild;
+    if (!el) continue;
+    const cls = farmStateClass(f);
+    const wasHit = S.prevDay[f.name]?.bloom || S.prevDay[f.name]?.milky;
+    const isHit = S.mode === "past" && (S.day[f.name]?.bloom || S.day[f.name]?.milky);
+    el.className = `farm ${f.kind} ${cls} ${S.farm === f.name ? "selected" : ""} ${isHit && !wasHit ? "hit" : ""}`;
+    m.setZIndexOffset(cls.includes("high") || cls === "bloom" ? 900 : S.farm === f.name ? 1000 : 500);
+    if (m.isTooltipOpen()) m.setTooltipContent(farmTip(f));
+  }
 }
 
-// ---------- panel ----------
-async function openSite(s) {
-  state.site = s;
-  $("panelEmpty").hidden = true;
-  $("panelSite").hidden = false;
-  $("siteName").textContent = s.name;
-  const label = { salmon: "Salmon farming fjord", shellfish: "Shellfish area", hafro: "Hafró toxic-algae monitoring station" }[s.kind];
-  $("siteMeta").textContent = `${label} · ${s.lat.toFixed(2)}°N ${Math.abs(s.lon).toFixed(2)}°W · approximate location`;
-  const q = encodeURIComponent(s.name);
-  [state.series, state.events, state.phenology, state.toxic] = await Promise.all([
-    fetch(`/api/timeseries?site=${q}`).then((r) => r.json()),
-    fetch(`/api/events?site=${q}`).then((r) => r.json()),
-    fetch(`/api/phenology?site=${q}`).then((r) => r.json()),
-    s.kind === "hafro" ? fetch(`/api/toxic?station=${q}`).then((r) => r.json()) : Promise.resolve([]),
-  ]);
-  state.fcSeries = await fetch(`/api/forecast_series?site=${q}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  renderPanel();
-}
-
-function renderPanel() {
-  if (!state.site) {
-    if (state.tab === "forecast") renderForecastList();
-    else if (state.tab === "model") renderModelInfo();
-    else renderOverview();
+// ---------------- legend ----------------
+function renderLegend(key, has) {
+  const box = $("#legend");
+  if (S.mode === "forecast") {
+    box.innerHTML = `<div class="lt"><span>Bloom risk, next ${S.horizon} days</span></div>
+      <div class="items"><span><i class="keydot" style="background:var(--high)"></i>High · over ${pct(S.cfg.risk.high)}</span>
+      <span><i class="keydot" style="background:var(--medium)"></i>Medium · ${pct(S.cfg.risk.low)}–${pct(S.cfg.risk.high)}</span>
+      <span><i class="keydot" style="background:var(--low)"></i>Low · under ${pct(S.cfg.risk.low)}</span>
+      <span><i class="keydot" style="background:#8a95a3"></i>No forecast (no data)</span></div>`;
     return;
   }
-  if (state.tab === "forecast" || state.tab === "model") { renderForecastSite(); return; }
-  renderCharts();
-  renderStats();
-  renderFarms();
-  if (state.tab === "blooms") { renderSiteCalendar(); renderEvents(); renderPhenology(); renderToxic(); }
+  const L_ = S.cfg.layers[key];
+  if (!L_) { box.innerHTML = ""; return; }
+  const p = (v) => (L_.log ? (Math.log(v) - Math.log(L_.min)) / (Math.log(L_.max) - Math.log(L_.min)) : (v - L_.min) / (L_.max - L_.min));
+  const grad = L_.stops.map((s, i) => `${s.c} ${(i / (L_.stops.length - 1)) * 100}%`).join(",");
+  const month = +S.date.slice(5, 7);
+  const why = month >= 11 || month <= 2 ? "Polar night: satellites can't see the sea." : "No satellite data this day (cloud or gap).";
+  const title = S.mode === "past" ? "Bloom strength" : L_.title;
+  box.innerHTML = `<div class="lt"><span>${esc(title)}</span><span>${esc(L_.units)}</span></div>
+    <div class="bar" style="background:linear-gradient(90deg,${grad})"></div>
+    <div class="ticks">${L_.ticks.map((t) => `<span style="left:${p(t) * 100}%">${t}</span>`).join("")}</div>
+    ${S.mode === "past" ? `<div class="items" style="margin-top:8px"><span><i class="keydot" style="background:var(--bloom)"></i>Farm in a confirmed bloom</span><span><i class="keydot" style="background:var(--milky)"></i>Farm in milky water (coccolithophores)</span></div>` : ""}
+    ${has ? "" : `<div class="nodata">${why}</div>`}`;
 }
 
-document.querySelectorAll("[data-window]").forEach((b) => b.onclick = () => {
-  state.window = b.dataset.window;
-  document.querySelectorAll("[data-window]").forEach((x) => x.classList.toggle("on", x === b));
-  if (state.series) renderCharts();
+// ---------------- left panel ----------------
+function renderLeft() {
+  const box = $("#left");
+  if (S.mode === "data") return renderLeftData(box);
+  if (S.mode === "past") return renderLeftPast(box);
+  return renderLeftForecast(box);
+}
+
+function renderLeftData(box) {
+  const L_ = S.cfg.layers[S.layer];
+  box.innerHTML = `
+    <h2>Ocean data</h2>
+    <p class="sub">Pick one input. The map shows only that, for the chosen day. These are the inputs the forecast reads.</p>
+    <div class="layergrid">${LAYER_ORDER.filter((k) => S.cfg.layers[k]).map((k) => `
+      <button data-layer="${k}" class="${k === S.layer ? "on" : ""}">${icon(k)}${esc(S.cfg.layers[k].title)}</button>`).join("")}</div>
+    <div class="infobox">
+      <h3>${esc(L_.title)}</h3><p>${esc(L_.description)}</p>
+      <div class="role"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 3 8-8"/></svg><span>In the forecast: ${esc(L_.role)}</span></div>
+    </div>
+    ${S.layer === "chl" || S.layer === "chl_obs" ? `<div class="toggle"><span>Fjord detail (300 m, clear days)</span>
+      <button class="switch" id="fjordSwitch" role="switch" aria-checked="${S.fjord}" aria-label="Fjord detail"></button></div>` : ""}
+    <div class="keyrow"><span><i class="keydot" style="background:#fff;box-shadow:0 0 0 2px #0a141e"></i>Sea-pen farm</span>
+      <span><i class="keydot" style="background:#ffe1cf;border-radius:3px;box-shadow:0 0 0 2px #0a141e"></i>Shellfish farm</span></div>`;
+  $$("[data-layer]", box).forEach((b) => b.onclick = () => setLayer(b.dataset.layer));
+  const sw = $("#fjordSwitch", box);
+  if (sw) sw.onclick = () => { S.fjord = !S.fjord; sw.setAttribute("aria-checked", S.fjord); updateOverlay(); };
+}
+
+function renderLeftPast(box) {
+  const hit = S.farms.filter((f) => S.day[f.name]?.bloom || S.day[f.name]?.milky);
+  hit.sort((a, b) => (S.day[b.name].ratio || 0) - (S.day[a.name].ratio || 0));
+  const busiest = (S.timeline?.days || []).filter((d) => d.bloom + d.milky > 0)
+    .sort((a, b) => b.bloom + b.milky - (a.bloom + a.milky)).slice(0, 5);
+  const row = (f) => { const d = S.day[f.name];
+    return `<button class="row ${S.farm === f.name ? "selected" : ""}" data-farm="${esc(f.name)}"><span class="t">${esc(f.farm)}</span>
+      <span class="v" style="color:${d.bloom ? "var(--bloom)" : "var(--milky)"}">${d.bloom ? (d.ratio ? `${d.ratio.toFixed(1)}×` : "bloom") : "milky"}</span>
+      <span class="s">${esc(f.area)} · ${f.kind === "sea" ? "sea pens" : "shellfish"}</span></button>`; };
+  box.innerHTML = `
+    <h2>Past blooms</h2>
+    <p class="sub">Blooms our detector found, day by day. A farm pulses when a bloom reaches it.</p>
+    <div class="hero"><span class="num" style="color:${hit.length ? "var(--bloom)" : "var(--text)"}">${hit.length}</span>
+      <span class="lab">farm${hit.length === 1 ? "" : "s"} in a bloom<br>on ${fmtShort(S.date)}</span></div>
+    ${hit.length ? `<div class="list">${hit.map(row).join("")}</div>`
+      : `<div class="empty-note">No farm is inside a bloom on this day.${busiest.length ? " Try one of the busiest days below, or press play." : ""}</div>`}
+    ${busiest.length ? `<div class="section-title">Busiest days in ${S.year}</div>
+      <div class="list">${busiest.map((d) => `<button class="row" data-jump="${d.date}"><span class="t">${fmtShort(d.date)}</span>
+        <span class="v" style="color:var(--bloom)">${d.bloom + d.milky} farms</span></button>`).join("")}</div>` : `<div class="empty-note">No blooms at farms in ${S.year}.</div>`}
+    <button class="linkbtn" data-how>How do we decide it's a bloom? →</button>`;
+  bindLeft(box);
+}
+
+function renderLeftForecast(box) {
+  const h = S.horizon;
+  const rows = S.farms.map((f) => ({ f, d: S.day[f.name] || {} })).filter((x) => x.d[`risk_${h}d`] != null)
+    .sort((a, b) => b.d[`risk_${h}d`] - a.d[`risk_${h}d`]);
+  const nHigh = rows.filter((x) => x.d[`level_${h}d`] === "high").length;
+  const nMed = rows.filter((x) => x.d[`level_${h}d`] === "medium").length;
+  box.innerHTML = `
+    <h2>Forecast</h2>
+    <p class="sub">Chance of a bloom at each farm, as issued on ${fmtShort(S.date)}.</p>
+    <div class="seg" role="group" aria-label="Horizon">
+      <button data-h="3" class="${h === 3 ? "on" : ""}">Next 3 days</button><button data-h="7" class="${h === 7 ? "on" : ""}">Next 7 days</button></div>
+    ${rows.length ? `<div class="hero"><span class="num" style="color:${nHigh ? "var(--high)" : nMed ? "var(--medium)" : "var(--low)"}">${nHigh || nMed}</span>
+      <span class="lab">farm${(nHigh || nMed) === 1 ? "" : "s"} at ${nHigh ? "high" : "medium"} risk<br>${nHigh && nMed ? `+ ${nMed} at medium` : nHigh || nMed ? "" : "all farms low risk"}</span></div>
+      <div class="list">${rows.slice(0, 14).map(({ f, d }) => `
+        <button class="row ${S.farm === f.name ? "selected" : ""}" data-farm="${esc(f.name)}"><span class="t">${esc(f.farm)}</span>
+        <span class="v" style="color:${LEVEL_COLOR[d[`level_${h}d`]]}">${pct(d[`risk_${h}d`])}</span>
+        <span class="riskbar"><i style="width:${Math.max(2, d[`risk_${h}d`] * 100)}%;background:${LEVEL_COLOR[d[`level_${h}d`]]}"></i></span>
+        <span class="s">${esc(f.area)}</span></button>`).join("")}</div>
+      ${rows.length > 14 ? `<p class="muted" style="margin:-6px 0 0;font-size:12px">+ ${rows.length - 14} more farms at lower risk</p>` : ""}`
+      : `<div class="empty-note">${+S.date.slice(5, 7) >= 11 || +S.date.slice(5, 7) <= 2 ? "No forecast in winter: satellites can't see the sea in the polar night." : "No forecast for this day."}</div>`}
+    <button class="linkbtn" data-how>How sure are we? →</button>`;
+  bindLeft(box);
+}
+
+function bindLeft(box) {
+  $$("[data-farm]", box).forEach((b) => b.onclick = () => openFarm(b.dataset.farm, true));
+  $$("[data-jump]", box).forEach((b) => b.onclick = () => setDate(b.dataset.jump));
+  $$("[data-h]", box).forEach((b) => b.onclick = () => setHorizon(+b.dataset.h));
+  $$("[data-how]", box).forEach((b) => b.onclick = openHow);
+}
+
+// ---------------- farm card ----------------
+async function openFarm(name, fly = false) {
+  S.farm = name;
+  const f = S.byName[name];
+  if (fly && f) map.flyTo([f.lat, f.lon], Math.max(map.getZoom(), 8.5), { duration: 0.8 });
+  document.body.classList.add("card-open");
+  updateMarkers();
+  await loadFarm();
+  syncUrl();
+}
+
+async function loadFarm() {
+  if (!S.farm) return;
+  try { S.farmData = await api(`/api/farm?name=${encodeURIComponent(S.farm)}&date=${S.date}`); }
+  catch { S.farmData = null; }
+  renderCard();
+}
+
+function closeFarm() {
+  S.farm = null; S.farmData = null;
+  $("#card").hidden = true;
+  document.body.classList.remove("card-open");
+  updateMarkers(); renderLeft(); syncUrl();
+}
+
+function renderCard() {
+  const box = $("#card");
+  const D = S.farmData;
+  if (!D) { box.hidden = true; return; }
+  const I = D.info;
+  const head = `
+    <div class="head"><div>
+      <span class="chip ${I.kind}">${I.kind === "sea" ? "Sea pens" : "Shellfish"}</span>
+      <h2>${esc(I.farm)}</h2>
+      <div class="who">${esc(I.company || "")}${I.company ? " · " : ""}${esc(I.area)}</div>
+    </div><button class="close" id="cardClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="meta">${I.species?.length ? `<span><b>${esc(I.species.join(", "))}</b></span>` : ""}
+      ${I.biomass_limit_t ? `<span>Max <b>${Number(I.biomass_limit_t).toLocaleString("en")} t</b></span>` : ""}
+      ${I.licence ? `<span>Licence <b>${esc(I.licence)}</b></span>` : ""}
+      ${I.in_use === false ? `<span><b>Not in use now</b></span>` : ""}</div>`;
+  let body = "";
+  if (S.mode === "forecast") body = cardForecast(D);
+  else if (S.mode === "past") body = cardPast(D);
+  else body = cardData(D);
+  box.innerHTML = head + body + toxicNote(D);
+  box.hidden = false;
+  $("#cardClose").onclick = closeFarm;
+  $$("[data-jump]", box).forEach((b) => b.onclick = () => setDate(b.dataset.jump));
+  $$("[data-h]", box).forEach((b) => b.onclick = () => setHorizon(+b.dataset.h));
+  $$("[data-maplayer]", box).forEach((b) => b.onclick = () => setLayer(b.dataset.maplayer));
+  $$("[data-how]", box).forEach((b) => b.onclick = openHow);
+}
+
+function toxicNote(D) {
+  if (!D.toxic) return "";
+  return `<div class="note"><b>Toxic algae can't be seen from space.</b> In ${fmtDay(D.date, { month: "long" })},
+    ${pct(D.toxic.month_share)} of Hafró's shellfish-area samples (2005–2019) had toxic algae above the safe limit. Check MAST before harvesting.</div>`;
+}
+
+function gauge(h, F) {
+  const r = 42, C = 2 * Math.PI * r, x = F?.risk ?? 0, lv = F?.level || "low";
+  return `<div class="gauge ${S.horizon === h ? "on" : ""}" data-h="${h}">
+    <svg viewBox="0 0 104 104"><circle class="gtrack" cx="52" cy="52" r="${r}"/>
+      <circle class="gval" cx="52" cy="52" r="${r}" stroke="${LEVEL_COLOR[lv]}" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - x)}" transform="rotate(-90 52 52)"/>
+      <text class="pct" x="52" y="60" text-anchor="middle">${F ? pct(x) : "–"}</text></svg>
+    <div class="glab">Bloom in the next ${h} days</div>${F ? `<div class="lvl ${lv}">${lv} risk</div>` : ""}</div>`;
+}
+
+function cardForecast(D) {
+  const F = D.forecast;
+  if (!F) return `<div class="status"><div class="icon">${icon("anomaly")}</div><div><div class="big">No forecast this day</div>
+    <div class="small">Forecasts run March–October, when satellites can see the sea.</div></div></div>`;
+  const h = S.horizon, X = F[`${h}d`], c = X.confidence;
+  const sure = c ? `When we say <b>${c.range}</b>, a bloom followed <b>${pct(c.observed)}</b> of the time
+    <span class="muted">(${c.n.toLocaleString("en")} past forecasts, ${c.years})</span>.` : "";
+  const happened = X.happened == null ? "" : `<div class="happened">${X.happened ? `<span style="color:var(--bloom)">●</span> <span>What really happened: <b>a bloom came</b> within ${h} days.</span>`
+    : `<span style="color:var(--low)">●</span> <span>What really happened: <b>no bloom</b> within ${h} days.</span>`}</div>`;
+  return `
+    <div class="gauges">${gauge(3, F["3d"])}${gauge(7, F["7d"])}</div>
+    <div class="block"><h3>How sure are we?</h3><div class="sure">${sure || "Not enough past forecasts at this level."}</div></div>
+    <div class="block"><h3>Why <span class="muted">what pushed the ${h}-day risk up</span></h3>
+      <ul class="why">${X.factors.length ? X.factors.slice(0, 4).map((x) => `<li><i></i><span>${esc(x.text)}</span></li>`).join("")
+        : "<li><i style='background:var(--low)'></i><span>Nothing unusual: conditions look like a normal day for this farm.</span></li>"}</ul>
+      ${happened}</div>
+    <div class="block"><h3>Risk over time <span class="muted">past 60 days</span></h3>${riskChart(F.series, D.date)}
+      <div class="chartkey"><span><i style="background:var(--accent)"></i>3-day risk</span><span><i style="background:var(--medium)"></i>7-day risk</span>
+      <span><i class="band" style="background:rgba(255,55,95,.35)"></i>Confirmed bloom</span></div></div>
+    <p class="muted" style="font-size:11.5px;margin:14px 0 0">Model trained only on data up to ${F.trained_until}, so this is what it would really have said on that day. <button class="linkbtn" data-how>How it works</button></p>`;
+}
+
+function cardPast(D) {
+  const C = D.current, K = D.checks;
+  let status;
+  if (C && C.status === "confirmed" && C.kind === "coccolithophore") status = `<div class="status milky"><div class="icon">${icon("rrs555")}</div><div>
+    <div class="big">Milky-water bloom</div><div class="small">Coccolithophores · day ${C.day} of ${C.days} · started ${fmtShort(C.start)}</div></div></div>`;
+  else if (C && C.status === "confirmed") status = `<div class="status bloom"><div class="icon">${icon("chl")}</div><div>
+    <div class="big">In a bloom · day ${C.day} of ${C.days}</div><div class="small">Peak ${C.peak_chl} mg/m³ (${C.peak_ratio}× normal) · ${esc(C.type)}</div></div></div>`;
+  else if (K) status = `<div class="status"><div class="icon">${icon("chl")}</div><div><div class="big">No bloom</div>
+    <div class="small">${C ? "A bloom-like signal, but it didn't pass every check." : "Algae at normal levels for this time of year."}</div></div></div>`;
+  else status = `<div class="status"><div class="icon">${icon("chl_obs")}</div><div><div class="big">No satellite data</div>
+    <div class="small">Cloud, a data gap, or the polar night.</div></div></div>`;
+  const isMilky = C && C.kind === "coccolithophore" && D.milky_checks;
+  const T = isMilky ? D.milky_checks : K;
+  const onWhen = !isMilky && K && K.on !== D.date ? `on its peak day, ${fmtDay(K.on, { day: "numeric", month: "short" })}` : "on this day";
+  const checks = T ? `<div class="block"><h3>How we know <span class="muted">${isMilky ? "our milky-water test" : "our bloom test"}, ${onWhen}</span></h3>
+    <ul class="checks">${T.steps.map((s) => `<li class="${s.ok ? "ok" : "no"}"><span class="mark">${s.ok ? "✓" : "–"}</span><span>${esc(s.label)}</span><span class="val">${esc(s.value)}</span></li>`).join("")}</ul>
+    <div class="verdict">${isMilky ? (C.status === "confirmed" ? "Bright, milky water on several clear days: a <b>coccolithophore bloom</b>. Clouds can hide it on single days." : "Not yet seen on enough clear days to confirm.")
+      : K.bloom ? "All six checks pass, so we call it a <b>confirmed bloom</b>." : "A bloom needs all six checks."}
+      <button class="linkbtn" data-how>Why these rules?</button></div></div>` : "";
+  const hist = D.history.length ? `<div class="block"><h3>Bloom history <span class="muted">${D.history.length} confirmed since 1998</span></h3>
+    <div class="hist">${D.history.slice(0, 8).map((e) => `<button data-jump="${e.peak}"><i class="dot ${e.kind === "coccolithophore" ? "milky" : ""}"></i>
+      <span>${fmtShort(e.start)} · ${e.days} days</span><span class="r">${e.kind === "coccolithophore" ? "milky water" : `${e.peak_ratio}× normal`}</span></button>`).join("")}</div></div>`
+    : `<div class="block"><h3>Bloom history</h3><div class="empty-note">No confirmed blooms at this farm since 1998.</div></div>`;
+  return status + checks + hist;
+}
+
+function cardData(D) {
+  const map_ = { chl: "chl", anomaly: "anomaly", sst: "sst", salinity: "salinity", mixed_layer: "mixed_layer", currents: "currents", waves: "waves" };
+  const fmt = (x) => (x.value == null ? "–" : x.key === "anomaly" ? x.value.toFixed(1) : Math.abs(x.value) < 1 ? x.value.toFixed(2) : x.value.toFixed(x.value > 100 ? 0 : 1));
+  return `<div class="block"><h3>Conditions at this farm <span class="muted">${fmtShort(D.date)} · last 60 days</span></h3>
+    <div class="tiles">${D.inputs.map((x) => `<button class="tile ${map_[x.key] === S.layer ? "on" : ""}" ${map_[x.key] ? `data-maplayer="${map_[x.key]}"` : ""}>
+      <div class="k">${esc(x.label)}</div><div class="v">${fmt(x)}<small>${x.value == null ? "" : esc(x.unit)}</small></div>${spark(x.spark)}</button>`).join("")}</div>
+    <p class="muted" style="font-size:11.5px;margin:10px 0 0">Averages over the sea within 10 km of the farm. Tap a tile to show it on the map.</p></div>`;
+}
+
+// ---------------- tiny SVG charts ----------------
+function spark(vals, color = "var(--accent)") {
+  const v = vals.map((x) => (x == null ? null : +x));
+  const ok = v.filter((x) => x != null);
+  if (ok.length < 2) return `<svg class="spark" viewBox="0 0 100 26"></svg>`;
+  const lo = Math.min(...ok), hi = Math.max(...ok), span = hi - lo || 1;
+  let d = "", pen = false;
+  v.forEach((x, i) => {
+    if (x == null) { pen = false; return; }
+    const X = (i / (v.length - 1)) * 100, Y = 24 - ((x - lo) / span) * 22;
+    d += `${pen ? "L" : "M"}${X.toFixed(1)},${Y.toFixed(1)}`; pen = true;
+  });
+  return `<svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none"><path d="${d}" stroke="${color}" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function riskChart(Sr, today) {
+  const n = Sr.date.length;
+  if (n < 2) return "";
+  const W = 320, H = 110, top = 6, bot = 92;
+  const x = (i) => (i / (n - 1)) * W, y = (v) => bot - v * (bot - top);
+  const line = (arr) => { let d = "", pen = false; arr.forEach((v, i) => { if (v == null) { pen = false; return; } d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`; pen = true; }); return d; };
+  const bw = W / (n - 1);
+  const bands = Sr.bloom.map((b, i) => (b ? `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${top}" width="${bw.toFixed(1)}" height="${bot - top}" fill="rgba(255,55,95,.3)" stroke="none"/>` : "")).join("");
+  const ti = Sr.date.indexOf(today);
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    ${[0, 0.5, 1].map((g) => `<line x1="0" x2="${W}" y1="${y(g)}" y2="${y(g)}" stroke="rgba(255,255,255,.07)" stroke-width="1"/>`).join("")}
+    ${bands}
+    <path d="${line(Sr.risk_7d)}" stroke="var(--medium)" vector-effect="non-scaling-stroke"/>
+    <path d="${line(Sr.risk_3d)}" stroke="var(--accent)" vector-effect="non-scaling-stroke"/>
+    ${ti >= 0 ? `<line x1="${x(ti)}" x2="${x(ti)}" y1="${top}" y2="${bot}" stroke="#fff" stroke-dasharray="3 3" stroke-width="1" vector-effect="non-scaling-stroke"/>` : ""}
+    <text class="axis" x="0" y="${H - 2}">${fmtDay(Sr.date[0], { day: "numeric", month: "short" })}</text>
+    <text class="axis" x="${W}" y="${H - 2}" text-anchor="end">${fmtDay(Sr.date[n - 1], { day: "numeric", month: "short" })}</text>
+    <text class="axis" x="${W - 2}" y="${top + 8}" text-anchor="end">100%</text></svg></div>`;
+}
+
+// ---------------- time bar ----------------
+function buildTimebar() {
+  S.days = seasonDays(S.year);
+  const sl = $("#slider");
+  sl.max = S.days.length - 1;
+  $("#year").textContent = S.year;
+  const yrs = S.cfg.years;
+  $("#yPrev").disabled = S.year <= yrs[0];
+  $("#yNext").disabled = S.year >= yrs[1];
+  $("#months").innerHTML = S.days.map((d, i) => (d.endsWith("-01") ? `<span style="left:${(i / (S.days.length - 1)) * 100}%">${fmtDay(d, { month: "short" })}</span>` : "")).join("");
+  drawStrip();
+}
+
+function drawStrip() {
+  const svg = $("#strip");
+  const n = S.days.length;
+  svg.setAttribute("viewBox", `0 0 ${n} 22`);
+  if (!S.timeline || S.mode === "data") { svg.innerHTML = ""; return; }
+  const by = Object.fromEntries(S.timeline.days.map((d) => [d.date, d]));
+  const val = (d) => (S.mode === "past" ? (d?.bloom || 0) + (d?.milky || 0) : d?.high || 0);
+  const mx = Math.max(1, ...S.days.map((d) => val(by[d])));
+  const color = S.mode === "past" ? "#ff375f" : "#ff453a";
+  svg.innerHTML = S.days.map((d, i) => { const v = val(by[d]); if (!v) return "";
+    const h = 3 + (v / mx) * 17; return `<rect x="${i}" y="${20 - h}" width="0.8" height="${h}" fill="${color}" opacity=".85"/>`; }).join("");
+}
+
+async function setYear(y, keepMonthDay = true) {
+  const yrs = S.cfg.years;
+  y = Math.max(yrs[0], Math.min(yrs[1], y));
+  const md = S.date ? S.date.slice(5) : "06-01";
+  S.year = y;
+  try { S.timeline = await api(`/api/timeline?year=${y}`); } catch { S.timeline = null; }
+  buildTimebar();
+  await setDate(`${y}-${keepMonthDay ? md : "06-01"}`);
+}
+
+let dateToken = 0;
+async function setDate(d) {
+  if (!S.days.includes(d)) {
+    const y = +d.slice(0, 4);
+    if (y !== S.year && y >= S.cfg.years[0] && y <= S.cfg.years[1]) { S.date = d; return setYear(y); }
+    d = d < S.days[0] ? S.days[0] : S.days[S.days.length - 1];
+  }
+  S.date = d;
+  const tok = ++dateToken;
+  $("#slider").value = S.days.indexOf(d);
+  $("#dateBig").textContent = fmtDay(d, { weekday: "short", day: "numeric", month: "short" });
+  $("#dateSub").textContent = d.slice(0, 4);
+  updateOverlay();
+  let day = {};
+  try { day = await api(`/api/day?date=${d}`); } catch { day = {}; }
+  if (tok !== dateToken) return;
+  S.prevDay = S.day; S.day = day;
+  const by = S.timeline?.days.find((x) => x.date === d);
+  if (by && S.mode === "past") $("#dateSub").textContent = `${d.slice(0, 4)} · ${by.bloom + by.milky} farms in a bloom`;
+  if (by && S.mode === "forecast") $("#dateSub").textContent = `${d.slice(0, 4)} · ${by.high || 0} high-risk farms`;
+  updateMarkers();
+  renderLeft();
+  if (S.farm) loadFarm();
+  syncUrl();
+}
+
+function step(n) {
+  const i = S.days.indexOf(S.date) + n;
+  if (i >= 0 && i < S.days.length) setDate(S.days[i]);
+  else if (S.playing) togglePlay();
+}
+
+function togglePlay() {
+  if (S.playing) { clearInterval(S.playing); S.playing = null; document.body.classList.remove("playing"); return; }
+  document.body.classList.add("playing");
+  S.playing = setInterval(() => step(1), 450 / S.speed);
+}
+
+// ---------------- modes, layers, horizon ----------------
+function setMode(m) {
+  S.mode = m;
+  document.body.dataset.mode = m;
+  $$(".modes button").forEach((b) => b.setAttribute("aria-selected", b.dataset.mode === m));
+  drawStrip();
+  updateOverlay();
+  updateMarkers();
+  renderLeft();
+  if (S.farmData) renderCard();
+  setDate(S.date);
+}
+
+function setLayer(k) {
+  S.layer = k;
+  if (S.mode !== "data") return setMode("data");
+  updateOverlay(); renderLeft();
+  if (S.farmData) renderCard();
+  syncUrl();
+}
+
+function setHorizon(h) {
+  S.horizon = h;
+  updateMarkers(); renderLeft(); renderLegend(null, true);
+  if (S.farmData) renderCard();
+}
+
+// ---------------- cursor read-out ----------------
+let hoverTimer = null, lastHover = "";
+const dms = (v, pos, neg) => { const a = Math.abs(v), d = Math.floor(a), m = Math.round((a - d) * 60); return `${d}°${String(m).padStart(2, "0")}′${v >= 0 ? pos : neg}`; };
+map.on("mousemove", (e) => {
+  const { lat, lng } = e.latlng;
+  $("#cursorPos").textContent = `${dms(lat, "N", "S")}  ${dms(lng, "E", "W")}`;
+  const key = overlayKey();
+  if (!key || !S.layerDates[key]?.has(S.date)) { $("#cursorVal").textContent = ""; return; }
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(async () => {
+    const id = `${key}|${S.date}|${lat.toFixed(2)}|${lng.toFixed(2)}`;
+    if (id === lastHover) return;
+    lastHover = id;
+    try {
+      const r = await api(`/api/value?layer=${key}&date=${S.date}&lat=${lat.toFixed(3)}&lon=${lng.toFixed(3)}`);
+      if (id !== lastHover) return;
+      const title = key === "bloom" ? "Chlorophyll" : S.cfg.layers[key].title;
+      $("#cursorVal").textContent = r.value == null ? "" : `${title} ${FMT[key](r.value)}`;
+    } catch { $("#cursorVal").textContent = ""; }
+  }, 90);
 });
+map.on("mouseout", () => { $("#cursorVal").textContent = ""; });
 
-$("closePanel").onclick = () => {
-  state.site = null; $("panelEmpty").hidden = false; $("panelSite").hidden = true; renderPanel();
-};
-
-function renderStats() {
-  if (!state.series) return;
-  const i = state.series.date.indexOf(currentDate());
-  const g = (k, d = 2) => { const v = i >= 0 && state.series[k] ? state.series[k][i] : null; return v == null ? "–" : v.toFixed(d); };
-  if (state.tab === "blooms") {
-    const bloom = i >= 0 && state.series.is_bloom?.[i] === 1;
-    const seen = i >= 0 && state.series.observed_bloom?.[i] === 1;
-    $("stats").innerHTML = `
-      <div class="stat"><div class="k">Status ${fmtDate(currentDate())}</div>
-        <div class="v ${bloom ? "crit" : ""}">${bloom ? "● Bloom" : g("chl") === "–" ? "No data" : "Normal"}</div>
-        <div class="u">${bloom ? (seen ? "confirmed by observation" : "gap-filled data only") : "&nbsp;"}</div></div>
-      <div class="stat"><div class="k">vs normal</div><div class="v">${g("chl_anomaly_ratio", 1)}×</div><div class="u">normal ${g("chl_clim")} mg/m³</div></div>
-      <div class="stat"><div class="k">Bloom area</div><div class="v">${i >= 0 && state.series.bloom_fraction?.[i] != null ? Math.round(state.series.bloom_fraction[i] * 100) : "–"}%</div><div class="u">of pixels within 10 km</div></div>`;
-    return;
-  }
-  $("stats").innerHTML = `
-    <div class="stat"><div class="k">Chlorophyll</div><div class="v">${g("chl")}</div><div class="u">mg/m³ · gap-free</div></div>
-    <div class="stat"><div class="k">Fjord 300 m</div><div class="v">${g("chl_300m")}</div><div class="u">mg/m³ · if cloud-free</div></div>
-    <div class="stat"><div class="k">Sea temp</div><div class="v">${g("sst", 1)}</div><div class="u">°C</div></div>`;
-}
-
-const CHARTS = [
-  { title: "Chlorophyll-a", sub: "mg/m³, log scale", log: true, series: [
-    { key: "chl", name: "Gap-free 4 km", type: "line", c: "--series-1" },
-    { key: "chl_300m", name: "Fjord 300 m (cloud-free days)", type: "dot", c: "--series-2" },
-    { key: "chl_obs", name: "Observed 4 km", type: "dot", c: "--series-3" },
-  ]},
-  { title: "Algae groups (satellite estimate)", sub: "chlorophyll from each group, mg/m³, cloud-free days only", log: true, series: [
-    { key: "diatoms", name: "Diatoms", type: "dot", c: "--series-1" },
-    { key: "haptophytes", name: "Haptophytes (incl. Chrysochromulina, coccolithophores)", type: "dot", c: "--series-2" },
-    { key: "dinoflagellates", name: "Dinoflagellates", type: "dot", c: "--series-3" },
-  ]},
-  { title: "Milky water (reflectance 555 nm)", sub: "sr⁻¹; high values suggest coccolithophore blooms", series: [
-    { key: "rrs555", name: "RRS 555", type: "dot", c: "--series-1" }]},
-  { title: "Sea surface temperature", sub: "°C", series: [{ key: "sst", name: "SST", type: "line", c: "--series-1" }] },
-  { title: "Mixed layer depth", sub: "m; shallow layer = stratified water, favours blooms", reverse: true, series: [
-    { key: "mixed_layer", name: "Mixed layer", type: "line", c: "--series-1" }]},
-  { title: "Sunlight", sub: "shortwave radiation, MJ/m² per day", series: [
-    { key: "shortwave_radiation_sum", name: "Radiation", type: "line", c: "--series-1" }]},
-  { title: "Wind speed", sub: "10 m daily mean, m/s", series: [
-    { key: "wind_speed_10m_mean", name: "Wind", type: "line", c: "--series-1" }]},
-];
-
-const BLOOM_CHARTS = [
-  { title: "Chlorophyll vs normal", sub: "mg/m³, log scale; red bands = confirmed bloom, blue bands = milky water (coccolithophores)", log: true, bands: true, series: [
-    { key: "chl", name: "Chlorophyll (gap-free)", type: "line", c: "--series-1" },
-    { key: "chl_clim", name: "Normal for the date (multi-year median)", type: "line", c: "--muted", dash: true },
-    { key: "chl_300m", name: "Fjord 300 m observations", type: "dot", c: "--series-2" },
-  ]},
-  { title: "Algae groups (satellite estimate)", sub: "what kind of algae is blooming; cloud-free days only", log: true, series: [
-    { key: "diatoms", name: "Diatoms", type: "dot", c: "--series-1" },
-    { key: "haptophytes", name: "Haptophytes (incl. Chrysochromulina, coccolithophores)", type: "dot", c: "--series-2" },
-    { key: "dinoflagellates", name: "Dinoflagellates", type: "dot", c: "--series-3" },
-  ]},
-  { title: "Sea surface temperature", sub: "°C (OSTIA satellite)", series: [{ key: "sst", name: "SST", type: "line", c: "--series-1" }] },
-  { title: "Mixed layer depth", sub: "m; shallow = stratified water (key bloom driver)", reverse: true, series: [
-    { key: "mixed_layer", name: "Mixed layer", type: "line", c: "--series-1" }]},
-];
-
-const bloomBands = {
-  id: "bloomBands",
-  beforeDatasetsDraw(chart, args, opts) {
-    const o = chart.options.plugins.bloomBands || {};
-    if (!o.flags && !o.cocco) return;
-    const { top, bottom } = chart.chartArea;
-    const x = chart.scales.x;
-    const w = Math.max(1, (x.getPixelForValue(1) - x.getPixelForValue(0)));
-    const ctx = chart.ctx;
-    ctx.save();
-    for (const [arr, col] of [[o.flags, "--critical-wash"], [o.cocco, "--cocco-wash"]]) {
-      if (!arr) continue;
-      ctx.fillStyle = css(col);
-      arr.forEach((f, i) => { if (f === 1) ctx.fillRect(x.getPixelForValue(i) - w / 2, top, w, bottom - top); });
-    }
-    ctx.restore();
-  },
-};
-
-const dateLine = {
-  id: "dateLine",
-  afterDatasetsDraw(chart) {
-    const i = chart.data.labels.indexOf(currentDate());
-    if (i < 0) return;
-    const x = chart.scales.x.getPixelForValue(i);
-    const { top, bottom } = chart.chartArea;
-    const ctx = chart.ctx;
-    ctx.save(); ctx.strokeStyle = css("--text"); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
-    ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.stroke(); ctx.restore();
-  },
-};
-
-function renderCharts() {
-  state.charts.forEach((c) => c.destroy());
-  state.charts = [];
-  const box = $("charts");
-  box.innerHTML = "";
-  const S = state.series;
-  let lo = 0, hi = S.date.length;
-  if (state.window !== "all") {
-    const c = Math.max(0, S.date.indexOf(currentDate()));
-    lo = Math.max(0, c - 90); hi = Math.min(S.date.length, lo + 181); lo = Math.max(0, hi - 181);
-  }
-  state.windowRange = [lo, hi];
-  const labels = S.date.slice(lo, hi);
-  for (const spec of state.tab === "blooms" ? BLOOM_CHARTS : CHARTS) {
-    const div = document.createElement("div");
-    div.className = "chartbox";
-    const legend = spec.series.length > 1
-      ? `<div class="lgd">${spec.series.map((s) => `<span><i style="background:${css(s.c)}"></i>${s.name}</span>`).join("")}</div>` : "";
-    div.innerHTML = `<h3>${spec.title}</h3><div class="sub">${spec.sub}</div>${legend}<div class="canvas"><canvas></canvas></div>`;
-    box.appendChild(div);
-    const datasets = spec.series.map((s) => ({
-      label: s.name,
-      data: S[s.key].slice(lo, hi).map((v) => (spec.log && v != null && v <= 0 ? null : v)),
-      borderColor: css(s.c), backgroundColor: css(s.c),
-      borderWidth: s.type === "line" ? 2 : 0, borderDash: s.dash ? [4, 3] : [],
-      pointRadius: s.type === "dot" ? 2 : 0, pointHoverRadius: 5,
-      showLine: s.type === "line", spanGaps: false, tension: 0,
-    }));
-    const chart = new Chart(div.querySelector("canvas"), {
-      type: "line",
-      data: { labels, datasets },
-      plugins: [bloomBands, dateLine],
-      options: {
-        animation: false, maintainAspectRatio: false, responsive: true,
-        interaction: { mode: "index", intersect: false },
-        onClick: (e, els, ch) => {
-          const i = ch.scales.x.getValueForPixel(e.x);
-          if (i != null && i >= 0) setIdx(state.dates.indexOf(labels[Math.round(i)]));
-        },
-        plugins: {
-          bloomBands: { flags: spec.bands && S.is_bloom ? S.is_bloom.slice(lo, hi) : null,
-                        cocco: spec.bands && S.is_cocco ? S.is_cocco.slice(lo, hi) : null },
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: css("--surface"), titleColor: css("--text"), bodyColor: css("--text-2"),
-            borderColor: css("--axis"), borderWidth: 1, filter: (it) => it.raw != null,
-            callbacks: { title: (it) => fmtDate(it[0].label) },
-          },
-        },
-        scales: {
-          x: {
-            grid: { display: false }, border: { color: css("--axis") },
-            ticks: {
-              color: css("--muted"), autoSkip: false, maxRotation: 0, font: { size: 10 },
-              callback(v) {
-                const d = labels[v];
-                const months = state.window === "all" ? ["01", "04", "07", "10"] : null;
-                if (d.endsWith("-01") && (!months || months.includes(d.slice(5, 7))))
-                  return new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", { month: "short", ...(state.window === "all" || d.slice(5, 7) === "01" ? { year: "2-digit" } : {}), timeZone: "UTC" });
-                return null;
-              },
-            },
-          },
-          y: {
-            type: spec.log ? "logarithmic" : "linear", reverse: !!spec.reverse,
-            grid: { color: css("--grid") }, border: { display: false },
-            ticks: { color: css("--muted"), font: { size: 10 }, maxTicksLimit: 4 },
-          },
-        },
-      },
-    });
-    state.charts.push(chart);
-  }
-}
-
-// ---------- time controls ----------
-async function setIdx(i) {
-  state.idx = Math.max(0, Math.min(state.dates.length - 1, i));
-  $("dateSlider").value = state.idx;
-  $("datePicker").value = currentDate();
-  updateMap();
-  if (state.series && state.window !== "all") {
-    const [lo, hi] = state.windowRange;
-    const c = state.series.date.indexOf(currentDate());
-    if (c < lo + 15 || c > hi - 15) renderCharts(); else state.charts.forEach((ch) => ch.draw());
-  } else state.charts.forEach((c) => c.draw());
-  await loadSnapshot();
-  if (state.tab === "forecast" || state.tab === "model") { await loadForecast(); renderPanel(); }
-  else renderStats();
-}
-
-// ---------- tabs ----------
-function setTab(tab, keepLayer = false) {
-  state.tab = tab;
-  if (!keepLayer) state.layer = { blooms: "bloom", forecast: "anomaly", model: "bloom" }[tab] || "chl";
-  document.body.dataset.tab = tab;
-  document.querySelectorAll(".tab[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-  buildLayerSelect();
-  renderLegend();
-  updateMap();
-  $("panel").dataset.tab = tab;
-  if (tab === "forecast" || tab === "model") loadForecast().then(() => { refreshMarkers(); renderPanel(); });
-  else renderPanel();
-  const u = new URL(location); u.searchParams.set("tab", tab); history.replaceState(null, "", u);
-}
-document.querySelectorAll(".tab[data-tab]").forEach((b) => b.onclick = () => setTab(b.dataset.tab));
-const shortDate = (s) => new Date(s + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit", timeZone: "UTC" });
-
-const MONTHS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
-
-function heat(v, max) {
-  if (!v) return "transparent";
-  const t = Math.min(1, Math.sqrt(v / max));
-  return `color-mix(in oklab, var(--critical) ${Math.round(20 + 80 * t)}%, var(--surface))`;
-}
-
-function jumpTo(dateStr) {
-  let i = state.dates.indexOf(dateStr);
-  if (i < 0) { alert(`Map layers cover ${state.dates[0].slice(0, 4)}–${state.dates.at(-1).slice(0, 4)} only.`); return; }
-  setIdx(i);
-}
-
-async function renderOverview() {
-  if (state.tab !== "blooms") { $("overview").innerHTML = ""; return; }
-  if (!state.calendar) state.calendar = await (await fetch("/api/calendar")).json();
-  document.querySelectorAll(".baselineYears").forEach((el) => el.textContent = state.calendar.baseline.join("–"));
-  const [y0, y1] = state.calendar.years;
-  const years = []; for (let y = y0; y <= y1; y++) years.push(y);
-  const by = {}; let max = 1;
-  for (const r of state.calendar.by_year) { by[`${r.site}|${r.year}`] = r.days; max = Math.max(max, r.days); }
-  const rows = state.sites.map((s) => `<tr><th>${s.name}</th>${years.map((y) => {
-    const v = by[`${s.name}|${y}`] || 0;
-    return `<td title="${s.name} ${y}: ${v} bloom days" style="background:${heat(v, max)}">${v || ""}</td>`; }).join("")}</tr>`).join("");
-  $("overview").innerHTML = `
-    <h3>Bloom days per year, ${y0}–${y1}</h3>
-    <div class="sub">Days a site had a detected bloom (≥2.5× normal and ≥3 mg/m³ on ≥10% of nearby sea). Darker = more days.</div>
-    <div class="heatwrap"><table class="heat years"><thead><tr><th></th>${years.map((y) => `<th>${String(y).slice(2)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
-}
-
-function renderSiteCalendar() {
-  const years = [...new Set(state.series.date.map((d) => +d.slice(0, 4)))];
-  const cnt = {}; let max = 1;
-  state.series.date.forEach((d, i) => {
-    if (state.series.is_bloom[i] === 1) { const k = d.slice(0, 7); cnt[k] = (cnt[k] || 0) + 1; max = Math.max(max, cnt[k]); }
-  });
-  const rows = years.map((y) => `<tr><th>${y}</th>${MONTHS.map((m, j) => {
-    const k = `${y}-${String(j + 1).padStart(2, "0")}`; const v = cnt[k] || 0;
-    return `<td data-jump="${k}-15" title="${k}: ${v} bloom days" style="background:${heat(v, max)}">${v || ""}</td>`; }).join("")}</tr>`).join("");
-  $("siteCalendar").innerHTML = `<h3>Bloom calendar</h3><div class="sub">Bloom days per month. Click a cell to jump there.</div>
-    <table class="heat"><thead><tr><th></th>${MONTHS.map((m) => `<th>${m}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
-  $("siteCalendar").querySelectorAll("[data-jump]").forEach((td) => td.onclick = () => jumpTo(td.dataset.jump));
-}
-
-function renderEvents() {
-  const all = state.events.filter((e) => e.start >= state.dates[0]);
-  const ev = state.showCandidates ? all : all.filter((e) => e.status === "confirmed");
-  const nCand = all.length - all.filter((e) => e.status === "confirmed").length;
-  const f = (x, d = 1) => (x == null ? "–" : (+x).toFixed(d));
-  $("eventList").innerHTML = `<h3>Bloom events since ${state.dates[0].slice(0, 4)} (${ev.length})</h3>
-    <div class="sub">Confirmed = lasted ≥3 days and was seen on a clear day (milky water: ≥2 clear days). Click a row to jump to the peak.</div>
-    <label class="check small"><input type="checkbox" id="candToggle" ${state.showCandidates ? "checked" : ""}> also show ${nCand} unconfirmed candidates</label>
-    <div class="tablewrap"><table class="events"><thead><tr><th>Start</th><th>Kind</th><th>Days</th><th>Peak</th><th>×normal</th><th>Type (estimate)</th><th>Status</th></tr></thead>
-    <tbody>${ev.map((e) => `<tr data-jump="${e.peak_date}" title="${e.reason}"><td class="nowrap">${shortDate(e.start)}</td>
-      <td>${e.kind === "coccolithophore" ? "milky water" : "chlorophyll"}</td><td>${e.days}</td>
-      <td>${f(e.peak_chl)}</td><td>${f(e.peak_ratio)}</td><td>${e.type}</td>
-      <td><span class="conf ${e.status === "confirmed" ? "high" : "medium"}">${e.status}</span></td></tr>`).join("") || `<tr><td colspan="7">No confirmed events</td></tr>`}</tbody></table></div>`;
-  $("eventList").querySelectorAll("[data-jump]").forEach((tr) => tr.onclick = () => jumpTo(tr.dataset.jump));
-  $("candToggle").onchange = (e) => { state.showCandidates = e.target.checked; renderEvents(); };
-}
-
-function renderToxic() {
-  const box = $("toxicInfo");
-  if (state.site?.kind !== "hafro" || !state.toxic?.length) { box.innerHTML = ""; return; }
-  const T = state.toxic;
-  const above = T.filter((t) => t.any_above);
-  const genus = (t) => ["dinophysis", "alexandrium", "pseudo_nitzschia"].filter((g) => t[`${g}_above`])
-    .map((g) => ({ dinophysis: "Dinophysis (DSP)", alexandrium: "Alexandrium (PSP)", pseudo_nitzschia: "Pseudo-nitzschia (ASP)" })[g]);
-  const years = [...new Set(T.map((t) => +t.date.slice(0, 4)))].sort();
-  const cnt = {}; T.forEach((t) => { const k = t.date.slice(0, 7); cnt[k] = cnt[k] || [0, 0]; cnt[k][1]++; if (t.any_above) cnt[k][0]++; });
-  const rows = years.map((y) => `<tr><th>${y}</th>${MONTHS.map((m, j) => {
-    const k = `${y}-${String(j + 1).padStart(2, "0")}`; const c = cnt[k];
-    if (!c) return `<td></td>`;
-    return `<td title="${k}: ${c[0]} of ${c[1]} samples above threshold" style="background:${c[0] ? heat(c[0], 3) : "var(--grid)"}">${c[0] || "·"}</td>`; }).join("")}</tr>`).join("");
-  box.innerHTML = `<h3>Toxic algae samples (Hafró, ${years[0]}–${years.at(-1)})</h3>
-    <div class="sub">${T.length} samples, ${above.length} with a toxic genus above the shellfish-poisoning threshold. Parsed automatically from Hafró's Icelandic text, so expect a few errors. Grey = sampled, nothing above threshold.</div>
-    <table class="heat"><thead><tr><th></th>${MONTHS.map((m) => `<th>${m}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>
-    <div class="tablewrap" style="margin-top:8px"><table class="events"><thead><tr><th>Date</th><th>Above threshold</th><th>Cells/L</th></tr></thead>
-    <tbody>${above.slice(0, 60).map((t) => `<tr title="${(t.text || "").replace(/"/g, "'").slice(0, 400)}"><td class="nowrap">${shortDate(t.date)}</td>
-      <td>${genus(t).join(", ")}</td><td>${[t.alexandrium_cells_per_l, t.dinophysis_cells_per_l, t.pseudo_nitzschia_cells_per_l].filter((x) => x).map((x) => Math.round(x).toLocaleString("en")).join(" / ") || "–"}</td></tr>`).join("")}</tbody></table></div>`;
-}
-
-let phenoChart = null;
-function renderPhenology() {
-  if (phenoChart) phenoChart.destroy();
-  const ph = state.phenology.filter((p) => p.r2 > 0.3);
-  const doyLabel = (v) => new Date(Date.UTC(2001, 0, v)).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
-  $("phenoNote").textContent = ph.length
-    ? `Shifted-Gaussian fit to each spring (Zhai et al. 2012 method). ${ph.length} year(s) fit well (r² > 0.3). Normal start: ${doyLabel(Math.round(ph[0].start_doy_normal))}. Years with several peaks (common inshore) are left out.`
-    : "No year with a single clear spring-bloom peak here. Inshore chlorophyll often has several peaks, which this method can't fit.";
-  const years = ph.map((p) => p.year);
-  phenoChart = new Chart($("phenoCanvas"), {
-    type: "line",
-    data: { labels: years, datasets: [
-      { label: "Bloom start", data: ph.map((p) => p.start_doy), borderColor: css("--series-1"), backgroundColor: css("--series-1"), showLine: false, pointRadius: 4 },
-      { label: "Bloom peak", data: ph.map((p) => p.peak_doy), borderColor: css("--series-2"), backgroundColor: css("--series-2"), showLine: false, pointRadius: 4 },
-    ]},
-    options: {
-      animation: false, maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: false },
-        tooltip: { backgroundColor: css("--surface"), titleColor: css("--text"), bodyColor: css("--text-2"), borderColor: css("--axis"), borderWidth: 1,
-          callbacks: { label: (it) => `${it.dataset.label}: ${doyLabel(Math.round(it.raw))}` } } },
-      scales: {
-        x: { grid: { display: false }, border: { color: css("--axis") }, ticks: { color: css("--muted"), font: { size: 10 }, maxRotation: 0, autoSkip: true } },
-        y: { grid: { color: css("--grid") }, border: { display: false },
-          ticks: { color: css("--muted"), font: { size: 10 }, maxTicksLimit: 5, callback: (v) => doyLabel(v) } },
-      },
-    },
-  });
-}
-
-function initTime() {
-  state.dates = allDates();
-  const s = $("dateSlider");
-  s.max = state.dates.length - 1;
-  s.oninput = () => setIdx(+s.value);
-  $("datePicker").min = state.dates[0];
-  $("datePicker").max = state.dates.at(-1);
-  $("datePicker").onchange = (e) => { const i = state.dates.indexOf(e.target.value); if (i >= 0) setIdx(i); };
-  $("prevBtn").onclick = () => setIdx(state.idx - 1);
-  $("nextBtn").onclick = () => setIdx(state.idx + 1);
-  $("playBtn").onclick = () => {
-    if (state.playing) { clearInterval(state.playing); state.playing = null; $("playBtn").textContent = "▶"; return; }
-    $("playBtn").textContent = "❚❚";
-    state.playing = setInterval(() => {
-      if (state.idx >= state.dates.length - 1) { $("playBtn").click(); return; }
-      setIdx(state.idx + 1);
-    }, 250);
+// ---------------- search ----------------
+function initSearch() {
+  const inp = $("#search"), ul = $("#searchResults");
+  let active = 0, items = [];
+  const render = () => {
+    const q = inp.value.trim().toLowerCase();
+    items = !q ? [] : S.farms.filter((f) => `${f.farm} ${f.company} ${f.area}`.toLowerCase().includes(q)).slice(0, 8);
+    ul.innerHTML = items.map((f, i) => `<li class="${i === active ? "active" : ""}" data-i="${i}"><span>${esc(f.farm)}</span><span>${esc(f.area)}</span></li>`).join("");
+    ul.classList.toggle("open", items.length > 0);
+    $$("li", ul).forEach((li) => li.onmousedown = (e) => { e.preventDefault(); pick(+li.dataset.i); });
   };
+  const pick = (i) => { const f = items[i]; if (!f) return; inp.value = ""; render(); inp.blur(); openFarm(f.name, true); };
+  inp.oninput = () => { active = 0; render(); };
+  inp.onkeydown = (e) => {
+    if (e.key === "ArrowDown") { active = Math.min(active + 1, items.length - 1); render(); e.preventDefault(); }
+    if (e.key === "ArrowUp") { active = Math.max(active - 1, 0); render(); e.preventDefault(); }
+    if (e.key === "Enter") pick(active);
+    if (e.key === "Escape") { inp.value = ""; render(); inp.blur(); }
+  };
+  inp.onblur = () => setTimeout(() => ul.classList.remove("open"), 100);
 }
 
-// ---------- boot ----------
-(async function boot() {
-  [state.manifest, state.sites] = await Promise.all([
-    fetch("/api/manifest").then((r) => r.json()),
-    fetch("/api/sites").then((r) => r.json()),
-  ]);
-  // deep links: ?date=2024-05-15&layer=chl&site=Seyðisfjörður
-  const q = new URLSearchParams(location.search);
-  if (q.get("view")) { const [la, lo, z] = q.get("view").split(",").map(Number); map.setView([la, lo], z); }
-  if (["blooms", "forecast", "model"].includes(q.get("tab"))) state.tab = q.get("tab");
-  const urlLayer = q.get("layer") && state.manifest.layers[q.get("layer")];
-  if (urlLayer) state.layer = q.get("layer");
-  initTime();
-  document.querySelector('[data-window="all"]').textContent = `All of ${state.dates[0].slice(0, 4)}–${state.dates.at(-1).slice(0, 4)}`;
-  drawSites();
-  await drawFarms();
-  setTab(state.tab, !!urlLayer);
-  const start = state.dates.indexOf(q.get("date") || `${state.dates.at(-1).slice(0, 4)}-05-15`);
-  await setIdx(start >= 0 ? start : 0);
-  const site = state.sites.find((s) => s.name === q.get("site"));
-  if (site) openSite(site);
-})();
+// ---------------- how it works ----------------
+async function openHow() {
+  const dlg = $("#how");
+  if (!S.conf) { try { S.conf = await api("/api/confidence"); } catch { S.conf = {}; } }
+  const R = S.cfg.rule, C = S.conf, cal = C.calibration?.["3d"], B = C.bloom?.["3d"];
+  const doc = (C.validation?.documented_events || []).find((e) => e.kind === "coccolithophore");
+  dlg.querySelector("#howSteps").innerHTML = `
+    <div class="step"><div class="n">1</div><h2>We watch the sea from space</h2>
+      <p>Every day, Copernicus satellites measure <b>chlorophyll</b>, the green pigment in algae. More chlorophyll means more algae.</p>
+      <ul><li>Daily since 1998, at ${S.farms.length} licensed farms (MAST register)</li>
+      <li>Plus sea temperature, salinity, the surface layer, currents, waves and weather</li>
+      <li>Clouds hide the sea about half the days, and the polar night all winter</li></ul>
+      <div class="stat"><b>±40%</b><span>typical error of one satellite chlorophyll value, so we compare each place with its own normal</span></div></div>
+    <div class="step"><div class="n">2</div><h2>We call it a bloom when…</h2>
+      <ul><li>algae are above <b>${R.min_chl} mg/m³</b></li>
+      <li>at least <b>${R.ratio}×</b> the normal level for that place and date</li>
+      <li>rarer than <b>${R.percentile}%</b> of days on that date (${R.baseline[0]}–${R.baseline[1]})</li>
+      <li>covering <b>≥${Math.round(R.area * 100)}%</b> of the sea within ${R.radius_km} km of the farm</li>
+      <li>lasting <b>3+ days</b>, and seen on at least one <b>clear day</b></li></ul>
+      <p style="margin-top:8px">Milky-water (coccolithophore) blooms are found separately, from very bright green light.</p>
+      ${doc ? `<div class="stat"><b>✓ Verified</b><span>${esc(doc.event.split("(")[0].trim())}: found from ${fmtShort(doc.first_detection)}, before Hafró's first water sample</span></div>` : ""}</div>
+    <div class="step"><div class="n">3</div><h2>We forecast 3–7 days ahead</h2>
+      <p>A model learned from 1998–2018 which conditions come before a bloom: recent clear-sky chlorophyll, how unusual it is, the season, sea temperature and the surface layer.</p>
+      ${cal ? `<div class="stat"><b>${pct(cal.high_precision)}</b><span>of "high risk" forecasts were followed by a bloom within 3 days (${cal.years}, out of sample)</span></div>
+      <div class="stat"><b>${pct(cal.caught_medium_or_high)}</b><span>of blooms got at least a medium-risk warning 3 days before</span></div>` : ""}
+      ${B ? `<p style="margin-top:10px">Tested on ${B.test_years}, years it never saw: much better than "a bloom will continue" (ROC-AUC ${B.model.roc_auc.toFixed(2)} vs ${B.baseline_persistence.roc_auc.toFixed(2)}) or the usual rate for the season (${B.baseline_seasonal.roc_auc.toFixed(2)}).</p>` : ""}</div>`;
+  dlg.showModal();
+}
+$("#howBtn").onclick = openHow;
+$("#howClose").onclick = () => $("#how").close();
+$("#how").addEventListener("click", (e) => { if (e.target.id === "how") e.target.close(); });
 
-
-// ---------- forecast & model (Step 4-5) ----------
-const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
-const lvlBadge = (lv) => `<span class="lvl ${lv}">${lv}</span>`;
-
-async function loadForecast() {
-  try {
-    const r = await fetch(`/api/forecast?date=${currentDate()}`);
-    const j = r.ok ? await r.json() : { sites: [] };
-    state.fc = Object.fromEntries(j.sites.map((x) => [x.site, x]));
-  } catch { state.fc = {}; }
-  refreshMarkers();
+// ---------------- url ----------------
+function syncUrl() {
+  const u = new URL(location);
+  u.searchParams.set("mode", S.mode);
+  u.searchParams.set("date", S.date || "");
+  if (S.mode === "data") u.searchParams.set("layer", S.layer); else u.searchParams.delete("layer");
+  if (S.farm) u.searchParams.set("farm", S.farm); else u.searchParams.delete("farm");
+  history.replaceState(null, "", u);
 }
 
-document.querySelectorAll("[data-h]").forEach((b) => b.onclick = () => {
-  state.horizon = +b.dataset.h;
-  document.querySelectorAll("[data-h]").forEach((x) => x.classList.toggle("on", x === b));
-  refreshMarkers(); renderPanel();
+// ---------------- wiring ----------------
+$$(".modes button").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+$("#slider").oninput = (e) => setDate(S.days[+e.target.value]);
+$("#prev").onclick = () => step(-1);
+$("#next").onclick = () => step(1);
+$("#play").onclick = togglePlay;
+$("#speed").onclick = () => {
+  S.speed = S.speed === 1 ? 2 : S.speed === 2 ? 4 : 1;
+  $("#speed").textContent = `${S.speed}×`;
+  if (S.playing) { togglePlay(); togglePlay(); }
+};
+$("#yPrev").onclick = () => setYear(S.year - 1);
+$("#yNext").onclick = () => setYear(S.year + 1);
+$("#zoomIn").onclick = () => map.zoomIn();
+$("#zoomOut").onclick = () => map.zoomOut();
+$("#home").onclick = () => map.flyToBounds(HOME, { duration: 0.8 });
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("#search").focus(); return; }
+  if (e.target.tagName === "INPUT" || $("#how").open) return;
+  if (e.key === "ArrowRight") step(1);
+  if (e.key === "ArrowLeft") step(-1);
+  if (e.key === " ") { e.preventDefault(); togglePlay(); }
+  if (e.key === "Escape" && S.farm) closeFarm();
 });
 
-function renderForecastList() {
-  const rows = Object.values(state.fc);
-  const h = state.horizon;
-  if (!rows.length) {
-    const m = +currentDate().slice(5, 7);
-    $("forecastList").innerHTML = `<div class="verdict">${m >= 11 || m <= 2 ? "No forecast in winter: satellites can't see the sea during the polar night (Nov–Feb)." : "No forecast for this date."}</div>`;
-    return;
+// ---------------- boot ----------------
+(async function boot() {
+  [S.cfg, S.farms] = await Promise.all([api("/api/config"), api("/api/farms")]);
+  S.byName = Object.fromEntries(S.farms.map((f) => [f.name, f]));
+  for (const [k, v] of Object.entries(S.cfg.layers)) S.layerDates[k] = new Set(v.dates);
+  const q = new URLSearchParams(location.search);
+  if (["data", "past", "forecast"].includes(q.get("mode"))) S.mode = q.get("mode");
+  if (S.cfg.layers[q.get("layer")]) S.layer = q.get("layer");
+  if (q.get("view")) { const [la, lo, z] = q.get("view").split(",").map(Number); map.setView([la, lo], z); }
+  else map.fitBounds(HOME);
+  document.body.dataset.mode = S.mode;
+  $$(".modes button").forEach((b) => b.setAttribute("aria-selected", b.dataset.mode === S.mode));
+  drawFarms();
+  initSearch();
+  const want = q.get("date");
+  S.year = want ? +want.slice(0, 4) : S.cfg.years[1];
+  try { S.timeline = await api(`/api/timeline?year=${S.year}`); } catch { S.timeline = null; }
+  buildTimebar();
+  let start = want;
+  if (!start || !S.days.includes(start)) {   // open on the busiest day of the latest year
+    const best = (S.timeline?.days || []).slice().sort((a, b) => (b.high || 0) + b.bloom - ((a.high || 0) + a.bloom))[0];
+    start = best?.date || `${S.year}-06-01`;
   }
-  rows.sort((a, b) => b[`risk_${h}d`] - a[`risk_${h}d`]);
-  const farms = rows.filter((r) => r.kind !== "hafro"), stations = rows.filter((r) => r.kind === "hafro");
-  const tr = (r) => `<tr data-site="${r.site}"><td>${r.site}</td><td>${pct(r[`risk_${h}d`])}</td><td>${lvlBadge(r[`level_${h}d`])}</td>
-    <td>${r.kind === "hafro" ? pct(r.toxic_risk_7d) : ""}</td></tr>`;
-  $("forecastList").innerHTML = `
-    <h3>Bloom risk, next ${h} days · issued ${fmtDate(currentDate())}</h3>
-    <div class="sub">Chance of a confirmed high-biomass bloom. Levels: low &lt; ${config.low * 100}%, medium ${config.low * 100}–${config.high * 100}%, high &gt; ${config.high * 100}%. Model trained up to ${rows[0].model_trained_until}.</div>
-    <table class="risklist"><thead><tr><th>Farm site</th><th>Risk</th><th>Level</th><th></th></tr></thead><tbody>${farms.map(tr).join("")}</tbody></table>
-    <h3>Hafró stations</h3>
-    <div class="sub">Bloom risk, plus toxic-algae risk in 7 days (experimental: not proven better than season alone).</div>
-    <table class="risklist"><thead><tr><th>Station</th><th>Bloom</th><th>Level</th><th>Toxic 7d</th></tr></thead><tbody>${stations.map(tr).join("")}</tbody></table>`;
-  $("forecastList").querySelectorAll("[data-site]").forEach((t) => t.onclick = () => openSite(state.sites.find((x) => x.name === t.dataset.site)));
-}
-const config = { low: 0.3, high: 0.6 };
-
-let fcChart = null, toxChart = null;
-function renderForecastSite() {
-  const s = state.site, f = state.fc[s.name], h = state.horizon;
-  const box = $("forecastSite");
-  if (state.tab === "forecast") {
-    $("stats").innerHTML = f ? `
-      <div class="stat"><div class="k">Bloom within 3 days</div><div class="v">${pct(f.risk_3d)}</div><div class="u">${lvlBadge(f.level_3d)}</div></div>
-      <div class="stat"><div class="k">Bloom within 7 days</div><div class="v">${pct(f.risk_7d)}</div><div class="u">${lvlBadge(f.level_7d)}</div></div>
-      <div class="stat"><div class="k">Toxic algae in 7 days</div><div class="v">${s.kind === "hafro" ? pct(f.toxic_risk_7d) : "–"}</div><div class="u">${s.kind === "hafro" ? "experimental" : "Hafró stations only"}</div></div>`
-      : `<div class="stat" style="grid-column:1/-1"><div class="k">No forecast for ${fmtDate(currentDate())}</div><div class="u">Forecasts cover Mar–Oct, 2005–2025.</div></div>`;
-  } else $("stats").innerHTML = "";
-  const factors = f ? f[`factors_${h}d`] : [];
-  const outcome = f && f[`bloom_in_${h}d`] != null
-    ? `What actually happened (known only afterwards): ${f[`bloom_in_${h}d`] ? "<b>a bloom occurred</b>" : "no bloom"} within ${h} days.` : "";
-  const isModel = state.tab === "model";
-  box.innerHTML = (isModel ? `<h3>Forecast vs reality at this site</h3><div class="sub">7-day bloom risk issued each day (out of sample) against actual confirmed bloom days (red bands). Test years 2019–2025 were never used for training the scored model.</div>`
-    : `<h3>Why this risk (${h} days)</h3><div class="sub">Factors pushing the risk up most, from the model's feature contributions.</div>
-       <ul class="factors">${factors.length ? factors.map((x) => `<li>${x.feature}</li>`).join("") : "<li>nothing stands out: risk is close to the normal level</li>"}</ul>
-       <div class="outcome">${outcome}</div>
-       <h3>Risk over time</h3><div class="sub">Forecast issued each day (out of sample) vs actual confirmed bloom days (red bands).</div>`) +
-    `<div class="lgd" style="display:flex;gap:10px;font-size:11px;color:var(--text-2)"><span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--series-1);margin-right:4px"></i>3-day risk</span><span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--series-2);margin-right:4px"></i>7-day risk</span></div>
-     <div class="canvas" style="position:relative;height:170px"><canvas id="fcCanvas"></canvas></div>
-     ${s.kind === "hafro" ? `<h3>Toxic-algae risk (7 days ahead)</h3><div class="sub">Experimental. Grey dots: Hafró samples above threshold.</div><div class="canvas" style="position:relative;height:130px"><canvas id="toxCanvas"></canvas></div>` : ""}`;
-  drawForecastChart(isModel);
-}
-
-function drawForecastChart(isModel) {
-  if (fcChart) fcChart.destroy();
-  if (toxChart) { toxChart.destroy(); toxChart = null; }
-  const S = state.fcSeries;
-  if (!S || !S.date.length) return;
-  let lo, hi;
-  if (isModel) { lo = S.date.findIndex((d) => d >= "2019-01-01"); hi = S.date.length; if (lo < 0) lo = 0; }
-  else {
-    const c = S.date.findIndex((d) => d >= currentDate());
-    const ci = c < 0 ? S.date.length - 1 : c;
-    lo = Math.max(0, ci - 120); hi = Math.min(S.date.length, ci + 60);
-  }
-  const labels = S.date.slice(lo, hi);
-  const opts = (ymax) => ({
-    animation: false, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-    plugins: { legend: { display: false }, bloomBands: { flags: S.is_bloom_today.slice(lo, hi) },
-      tooltip: { backgroundColor: css("--surface"), titleColor: css("--text"), bodyColor: css("--text-2"), borderColor: css("--axis"), borderWidth: 1,
-        callbacks: { title: (it) => fmtDate(it[0].label), label: (it) => `${it.dataset.label}: ${pct(it.raw)}` } } },
-    scales: {
-      x: { grid: { display: false }, border: { color: css("--axis") }, ticks: { color: css("--muted"), font: { size: 10 }, maxRotation: 0, autoSkip: false,
-        callback(v) { const d = labels[v]; if (!d) return null; const yearStart = d.slice(5) === "03-01";
-          if (isModel) return yearStart ? d.slice(0, 4) : null;
-          return d.endsWith("-01") ? new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" }) : null; } } },
-      y: { min: 0, max: ymax, grid: { color: css("--grid") }, border: { display: false }, ticks: { color: css("--muted"), font: { size: 10 }, maxTicksLimit: 4, callback: (v) => pct(v) } },
-    },
-  });
-  fcChart = new Chart($("fcCanvas"), {
-    type: "line",
-    data: { labels, datasets: [
-      { label: "3-day risk", data: S.risk_3d.slice(lo, hi), borderColor: css("--series-1"), borderWidth: isModel ? 1 : 2, pointRadius: 0, tension: 0, spanGaps: false },
-      { label: "7-day risk", data: S.risk_7d.slice(lo, hi), borderColor: css("--series-2"), borderWidth: isModel ? 1 : 2, pointRadius: 0, tension: 0, spanGaps: false },
-    ]},
-    plugins: [bloomBands, dateLine],
-    options: opts(1),
-  });
-  if (state.site.kind === "hafro" && $("toxCanvas")) {
-    const hits = {};
-    (state.toxic || []).forEach((t) => { if (t.any_above) hits[t.date] = 1; });
-    toxChart = new Chart($("toxCanvas"), {
-      type: "line",
-      data: { labels, datasets: [
-        { label: "Toxic risk", data: S.toxic_risk_7d.slice(lo, hi), borderColor: css("--series-3"), borderWidth: 2, pointRadius: 0, tension: 0 },
-        { label: "Hafró: above threshold", data: labels.map((d) => (hits[d] ? 0.97 : null)), showLine: false, pointRadius: 3, borderColor: css("--muted"), backgroundColor: css("--muted") },
-      ]},
-      plugins: [dateLine],
-      options: { ...opts(1), plugins: { ...opts(1).plugins, bloomBands: {} } },
-    });
-  }
-}
-
-async function renderModelInfo() {
-  if (!state.metrics) state.metrics = await (await fetch("/api/metrics")).json();
-  const M = state.metrics;
-  const f3 = (x) => (x == null ? "–" : x.toFixed(2));
-  const ci = (c) => `[${c[0] >= 0 ? "+" : ""}${c[0].toFixed(2)}, ${c[1] >= 0 ? "+" : ""}${c[1].toFixed(2)}]`;
-  const sig = (c) => (c[0] > 0 ? "<b>significantly better</b>" : c[1] < 0 ? "<b>significantly worse</b>" : "not significantly different");
-  const table = (r, rows) => `<table class="mtable"><thead><tr><th>Method</th><th>ROC-AUC</th><th>PR-AUC</th><th>Precision</th><th>Recall</th></tr></thead><tbody>
-    ${rows.map(([k, name]) => r[k] ? `<tr class="${k === "model" || k === "lightgbm" ? "best" : ""}"><td>${name}</td><td>${f3(r[k].roc_auc)}</td><td>${f3(r[k].pr_auc)}</td><td>${f3(r[k].precision)}</td><td>${f3(r[k].recall)}</td></tr>` : "").join("")}</tbody></table>`;
-  let html = `<h3>How good are the forecasts?</h3><div class="sub">All scores are on years the model never saw during training. ROC-AUC: 0.5 = coin flip, 1 = perfect. PR-AUC: compare with the share of positives (what random guessing would score).</div>`;
-  if (M.bloom) {
-    for (const [k, r] of Object.entries(M.bloom)) {
-      html += `<h3>Bloom within ${r.horizon_days} days</h3><div class="sub">Test ${r.test_years}, ${r.n_test.toLocaleString("en")} site-days, ${pct(r.positive_rate_test)} with a bloom.</div>
-        ${table(r, [["model", "Model (LightGBM)"], ["baseline_persistence", "Persistence: bloom seen last week"], ["baseline_seasonal", "Seasonal: usual rate for site & month"]])}
-        <div class="verdict">vs persistence: ${sig(r.auc_gain_vs_persistence_ci95)} (AUC gain ${ci(r.auc_gain_vs_persistence_ci95)}); vs seasonal: ${sig(r.auc_gain_vs_seasonal_ci95)} ${ci(r.auc_gain_vs_seasonal_ci95)}.<br>
-        <b>New blooms only</b> (none seen the week before, ${pct(r.onset.positive_rate)} positive): AUC ${f3(r.onset.model.roc_auc)} vs seasonal ${f3(r.onset.baseline_seasonal.roc_auc)}, PR-AUC ${f3(r.onset.model.pr_auc)}, ${sig(r.onset.auc_gain_vs_seasonal_ci95)}.</div>`;
-    }
-    const imp = Object.entries(M.bloom["7d"].importance).slice(0, 8);
-    const mx = imp[0][1];
-    html += `<h3>What drives the 7-day bloom forecast</h3><div class="sub">Share of the model's total gain.</div>` +
-      imp.map(([k, v]) => `<div class="barrow"><span class="lab" title="${k}">${k}</span><div class="bar" style="width:${(v / mx) * 100}%"></div><span class="num">${pct(v)}</span></div>`).join("");
-  }
-  if (M.toxic) {
-    html += `<h3>Toxic algae in 7 days (Hafró stations)</h3><div class="sub">Trained on 2005–2014 Hafró samples, tested on 2015–2019 (194 samples).</div>`;
-    const names = { any_above: "Any toxic genus", alexandrium_above: "Alexandrium (PSP)", dinophysis_above: "Dinophysis (DSP)", pseudo_nitzschia_above: "Pseudo-nitzschia (ASP)" };
-    html += `<table class="mtable"><thead><tr><th>Target</th><th>Model AUC</th><th>Seasonal AUC</th><th>Verdict</th></tr></thead><tbody>` +
-      M.toxic.map((r) => `<tr><td>${names[r.target]}</td><td>${f3(r.lightgbm.roc_auc)}</td><td>${f3(r.baseline_seasonal.roc_auc)}</td><td>${r.auc_gain_vs_best_baseline.ci95[0] > 0 ? "better" : r.auc_gain_vs_best_baseline.ci95[1] < 0 ? "worse" : "not proven"}</td></tr>`).join("") +
-      `</tbody></table><div class="verdict">Conditions add at most a little over "it's July at this station". The toxic forecast is shown as <b>experimental</b>.</div>`;
-  }
-  const V = M.validation;
-  if (V) {
-    html += `<h3>Detector checked against independent evidence</h3><ul class="plainlist">` +
-      V.documented_events.map((e) => `<li>${e.result.startsWith("DETECTED") ? "✅" : "⚠️"} ${e.event}: ${e.result}${e.first_detection ? " from " + e.first_detection : ""}</li>`).join("") +
-      (V.hafro_toxic_vs_satellite ? `<li>ℹ️ Satellite blooms near toxic Hafró samples: ${pct(V.hafro_toxic_vs_satellite.share_toxic_samples_with_satellite_bloom)} vs ${pct(V.hafro_toxic_vs_satellite.share_clean_samples_with_satellite_bloom)} near clean ones, so toxic algae are invisible to chlorophyll.</li>` : "") +
-      (V.phenology_vs_literature ? `<li>ℹ️ Spring bloom peak (median ${V.phenology_vs_literature.median_peak}) vs literature: peak usually in May.</li>` : "") + `</ul>`;
-  }
-  html += `<h3>Honest caveats</h3><ul class="plainlist">
-    <li>• Chlorophyll from space is ±40% and blind under cloud (about half the days) and in the polar night.</li>
-    <li>• A "bloom" here means high biomass; it says nothing about toxicity.</li>
-    <li>• Gap-filled chlorophyll is used with a 5-day delay, because the archive may fill a day using later images.</li>
-    <li>• Analysis points are approximate mid-fjord placeholders. Licensed farm sites (MAST) are shown on the map, but the models do not use them yet.</li></ul>`;
-  $("modelInfo").innerHTML = html;
-}
+  await setDate(start);
+  if (q.get("farm") && S.byName[q.get("farm")]) openFarm(q.get("farm"));
+  if (q.get("how")) openHow();
+})();

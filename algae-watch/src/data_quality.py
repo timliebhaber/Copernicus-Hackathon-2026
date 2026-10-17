@@ -35,7 +35,7 @@ def season(ds):
 def site_values(da, ds_for_mask, radius_km=10):
     """{site: daily area-mean series} over the season."""
     out = {}
-    for s in config.SITES:
+    for s in config.FARMS:
         m = common.site_mask(ds_for_mask, s, radius_km=radius_km)
         v = da.squeeze().values[:, m]
         out[s["name"]] = pd.Series(np.nanmean(v, axis=1), index=pd.to_datetime(da.time.values).normalize())
@@ -93,7 +93,7 @@ def main():
 
     # 3. Fjord (300 m) vs offshore 4 km chlorophyll at each site, same day
     s = pd.read_parquet(config.PROCESSED / "site_series.parquet")
-    s = s[s.date.dt.month.isin(SEASON) & s.site.isin([x["name"] for x in config.SITES]) &
+    s = s[s.date.dt.month.isin(SEASON) & s.site.isin([x["name"] for x in config.FARMS]) &
           s.date.dt.year.between(*YEARS)]
     per = {}
     for name, g in s.groupby("site"):

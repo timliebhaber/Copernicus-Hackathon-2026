@@ -162,7 +162,7 @@ def scores(y, p, thr):
 
 
 def bootstrap_ci(y, p1, p2, groups, n=500, seed=0):
-    """95% interval of ROC-AUC(p1) - ROC-AUC(p2), resampling whole site-years (days are correlated)."""
+    """95% interval of ROC-AUC(p1) - ROC-AUC(p2), resampling whole area-years (days and farms are correlated)."""
     rng = np.random.default_rng(seed)
     ug = np.unique(groups)
     idx = {g: np.where(groups == g)[0] for g in ug}
@@ -197,7 +197,8 @@ def evaluate(df):
         cand = np.quantile(pv, np.linspace(0.5, 0.995, 100))
         f1 = [2 * ((pv >= c) & (yv == 1)).sum() / max((pv >= c).sum() + (yv == 1).sum(), 1) for c in cand]
         thr = float(cand[int(np.argmax(f1))])
-        groups = (test.site + test.date.dt.year.astype(str)).values
+        # resample whole area-years: farms in one fjord see nearly the same water, so they are not independent
+        groups = (test.site.map(config.AREA_OF).fillna(test.site) + test.date.dt.year.astype(str)).values
         onset = (test.obs_bloom_7d == 0).values  # no bloom seen in the past week -> a NEW bloom
         r = {"horizon_days": h, "n_train": int(len(train)), "n_test": int(len(test)),
              "test_years": f"{VAL_END + 1}-{test.date.dt.year.max()}", "positive_rate_test": float(y.mean()),

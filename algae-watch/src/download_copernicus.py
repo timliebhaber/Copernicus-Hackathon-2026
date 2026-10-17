@@ -96,10 +96,10 @@ def main():
         if name == "chl300":
             ds_id, vars_, period = CHL300
             for y in years_for(period, a.years):
-                for s in config.SITES:
+                hy, hx = config.CHL300_HALF
+                for s in config.CHL300_BOXES:
                     out = common.raw_year(f"chl300_{common.slug(s['name'])}", y, a.region)
-                    fetch(out, ds_id, vars_, (s["lat"] - 0.2, s["lat"] + 0.2),
-                          (s["lon"] - 0.45, s["lon"] + 0.45), y)
+                    fetch(out, ds_id, vars_, (s["lat"] - hy, s["lat"] + hy), (s["lon"] - hx, s["lon"] + hx), y)
             continue
         ds_id, vars_, depth, period = STREAMS[name]
         for y in years_for(period, a.years):

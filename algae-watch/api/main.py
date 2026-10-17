@@ -1,11 +1,16 @@
-"""AlgaeWatch Iceland API. Run: .venv/bin/uvicorn api.main:app --reload"""
+"""AlgaeWatch Iceland API. Run: .venv/bin/uvicorn api.main:app --reload
+
+Everything is organised around the licensed marine farms (config.FARMS, MAST register).
+"""
 import json
+import math
 import sys
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -14,211 +19,421 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 import config  # noqa: E402
-import common  # noqa: E402
 
 app = FastAPI(title="AlgaeWatch Iceland")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
 
 TILES = config.PROCESSED / "tiles"
+FARM_NAMES = {f["name"] for f in config.FARMS}
+
+# Map layers: what they are and how the forecast uses them (shown in the layer picker).
+LAYER_INFO = {
+    "chl": ("Chlorophyll", "Green pigment of algae, seen from space (gap-filled). The main bloom signal.",
+            "Bloom signal (used with a 5-day delay)"),
+    "chl_obs": ("Clear-sky chlorophyll", "Only real satellite views; gaps are clouds.",
+                "Latest clear-sky view (strongest input)"),
+    "anomaly": ("Vs normal", "Chlorophyll compared with the 1998–2022 median for this place and date.",
+                "How unusual the algae level is"),
+    "sst": ("Sea temperature", "Satellite sea-surface temperature (OSTIA).", "Warm water speeds up growth"),
+    "salinity": ("Salinity", "Surface salinity (GLORYS ocean model). Fresher water floats on top.",
+                 "Freshwater layering"),
+    "mixed_layer": ("Surface layer", "Depth of the well-mixed surface layer. Shallow = calm, layered water.",
+                    "A shallow layer keeps algae in the light"),
+    "currents": ("Currents", "Surface current speed (GLORYS ocean model).", "Moves water between fjords"),
+    "waves": ("Waves", "Significant wave height (wave model). Storms mix the water.", "Storms break up blooms"),
+    "rrs555": ("Milky water", "Green-light reflectance. Very bright = coccolithophore bloom.",
+               "Detects coccolithophore blooms"),
+}
+# hover values: layer -> (stream, variable, transform)
+VALUE_SRC = {
+    "chl": ("chl_l4", "CHL", None), "chl_obs": ("pft_l3", "CHL", None), "anomaly": ("chl_l4", "CHL", "anomaly"),
+    "bloom": ("chl_l4", "CHL", "anomaly"), "sst": ("sst_ostia", "analysed_sst", "kelvin"),
+    "salinity": ("phys", "so", None), "mixed_layer": ("phys", "mlotst", None), "currents": ("phys", "uo", "speed"),
+    "waves": ("waves", "VHM0", None), "rrs555": ("rrs_l3", "RRS555", None),
+}
 
 
-TS_COLS = ["date", "chl", "chl_obs", "chl_300m", "diatoms", "haptophytes", "dinoflagellates", "rrs555",
-           "secchi", "sst", "salinity", "mixed_layer", "nitrate", "silicate", "wave_height",
-           "shortwave_radiation_sum", "wind_speed_10m_mean", "current_speed"]
+def clean_value(v, nd=4):
+    if v is None:
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return v
+    return None if not math.isfinite(v) else round(v, nd)
+
+
+def need(f):
+    if not f.exists():
+        raise HTTPException(503, f"No processed data yet ({f.name}): run the pipeline (see README)")
+    return f
 
 
 @lru_cache
 def series():
-    f = config.PROCESSED / "site_series.parquet"
-    if not f.exists():
-        raise HTTPException(503, "No processed data yet: run the pipeline (see README)")
-    s = pd.read_parquet(f)
-    b = config.PROCESSED / "blooms.parquet"
-    if b.exists():
-        cols = ["date", "site", "chl_clim", "chl_anomaly_ratio", "bloom_fraction", "candidate_bloom",
-                "is_bloom", "observed_bloom", "cocco_day", "is_cocco"]
-        bl = pd.read_parquet(b)
-        bl = bl[[c for c in cols if c in bl.columns]]
-        s = s.merge(bl, on=["date", "site"], how="left")
-    return s
+    s = pd.read_parquet(need(config.PROCESSED / "site_series.parquet"))
+    b = pd.read_parquet(need(config.PROCESSED / "blooms.parquet")).drop(columns=["lat", "lon", "kind", "chl"])
+    return s.merge(b, on=["site", "date"], how="left").set_index(["site", "date"]).sort_index()
 
 
 @lru_cache
 def events():
-    f = config.PROCESSED / "bloom_events.parquet"
-    return pd.read_parquet(f) if f.exists() else pd.DataFrame()
-
-
-@lru_cache
-def phenology():
-    f = config.PROCESSED / "phenology.parquet"
-    return pd.read_parquet(f) if f.exists() else pd.DataFrame()
-
-
-def clean(df):
-    """DataFrame -> JSON-safe dict of columns (NaN -> null)."""
-    out = {}
-    for c in df.columns:
-        if c == "date":
-            out[c] = df[c].dt.strftime("%Y-%m-%d").tolist()
-        else:
-            v = df[c].astype(float).round(4).to_numpy()
-            out[c] = [None if not np.isfinite(x) else float(x) for x in v]
-    return out
-
-
-@app.get("/api/sites")
-def sites():
-    n = {}
-    for f in farms().get("features", []):
-        a = f["properties"]["analysis_site"]
-        n[a] = n.get(a, 0) + 1
-    return [{**s, "slug": common.slug(s["name"]), "placeholder": config.SITES_ARE_PLACEHOLDERS,
-             "farms": n.get(s["name"], 0)} for s in config.POINTS]
-
-
-@lru_cache
-def farms():
-    f = config.FARMS_FILE
-    return json.loads(f.read_text()) if f.exists() else {"type": "FeatureCollection", "features": []}
-
-
-@app.get("/api/farms")
-def farm_sites():
-    """Licensed aquaculture sites from MAST (GeoJSON), each linked to its analysis area if within range."""
-    return farms()
-
-
-@lru_cache
-def toxic():
-    f = config.PROCESSED / "hafro_toxic.parquet"
-    return pd.read_parquet(f) if f.exists() else pd.DataFrame()
-
-
-@app.get("/api/toxic")
-def toxic_samples(station: str):
-    """Hafró toxic-algae monitoring entries for one station (2005-2019)."""
-    t = toxic()
-    if t.empty:
-        return []
-    t = t[t.station == station].sort_values("date", ascending=False)
-    cols = ["date", "any_above", "dinophysis_above", "alexandrium_above", "pseudo_nitzschia_above",
-            "dinophysis_present", "alexandrium_present", "pseudo_nitzschia_present",
-            "alexandrium_cells_per_l", "dinophysis_cells_per_l", "pseudo_nitzschia_cells_per_l", "warning", "text"]
-    return records(t[cols])
-
-
-@app.get("/api/manifest")
-def manifest():
-    f = TILES / "manifest.json"
-    if not f.exists():
-        raise HTTPException(404, "Run src/make_tiles.py first")
-    return json.loads(f.read_text())
-
-
-@app.get("/api/timeseries")
-def timeseries(site: str, start: str | None = None, end: str | None = None):
-    start = start or f"{config.APP_YEARS[0]}-01-01"
-    end = end or f"{config.APP_YEARS[1]}-12-31"
-    df = series()
-    df = df[(df.site == site) & (df.date >= start) & (df.date <= end)]
-    if df.empty:
-        raise HTTPException(404, f"unknown site {site}")
-    cols = [c for c in TS_COLS + ["chl_clim", "chl_anomaly_ratio", "bloom_fraction", "candidate_bloom",
-                                  "is_bloom", "observed_bloom", "cocco_day", "is_cocco"] if c in df.columns]
-    return clean(df[cols].sort_values("date"))
-
-
-def records(df):
-    out = df.copy()
-    for c in out.columns:
-        if pd.api.types.is_datetime64_any_dtype(out[c]):
-            out[c] = out[c].dt.strftime("%Y-%m-%d")
-    out = out.astype(object).where(out.notna(), None)
-    return out.to_dict("records")
-
-
-@app.get("/api/events")
-def bloom_events(site: str | None = None):
-    ev = events()
-    if site:
-        ev = ev[ev.site == site]
-    return records(ev.sort_values("start", ascending=False).drop(columns=["sst_anomaly_hint"], errors="ignore"))
-
-
-@app.get("/api/phenology")
-def bloom_phenology(site: str):
-    ph = phenology()
-    return records(ph[ph.site == site].sort_values("year"))
-
-
-@app.get("/api/calendar")
-def calendar():
-    """Bloom days per site and year (all years), plus per site and month."""
-    df = series()
-    df = df[df.is_bloom == True]  # noqa: E712
-    by_year = df.groupby(["site", df.date.dt.year]).size().rename("days").reset_index()
-    by_month = df.groupby(["site", df.date.dt.month]).size().rename("days").reset_index()
-    return {"years": [config.FIRST_YEAR, config.LAST_YEAR], "baseline": list(config.BASELINE_YEARS),
-            "by_year": records(by_year.rename(columns={"date": "year"})),
-            "by_month": records(by_month.rename(columns={"date": "month"}))}
+    return pd.read_parquet(need(config.PROCESSED / "bloom_events.parquet"))
 
 
 @lru_cache
 def forecast():
     f = config.PROCESSED / "forecast.parquet"
-    return pd.read_parquet(f) if f.exists() else pd.DataFrame()
+    return pd.read_parquet(f).set_index(["site", "date"]).sort_index() if f.exists() else pd.DataFrame()
 
 
-@app.get("/api/forecast")
-def forecast_day(date: str):
-    """Forecast issued on `date` for every site: bloom risk 3/7 days, level, top factors, toxic risk."""
-    f = forecast()
-    if f.empty:
-        raise HTTPException(503, "Run src/predict.py first")
-    d = f[f.date == pd.Timestamp(date)].copy()
-    for h in config.HORIZONS:
-        d[f"factors_{h}d"] = d[f"factors_{h}d"].map(json.loads)
-    return {"date": date, "thresholds": {"low": config.RISK_LOW, "high": config.RISK_HIGH}, "sites": records(d)}
+@lru_cache
+def manifest():
+    return json.loads(need(TILES / "manifest.json").read_text())
 
 
-@app.get("/api/forecast_series")
-def forecast_series(site: str, start: str | None = None, end: str | None = None):
-    """Daily forecast history for one site (risk vs what actually happened)."""
-    f = forecast()
-    if f.empty:
-        raise HTTPException(503, "Run src/predict.py first")
-    d = f[f.site == site]
-    if start:
-        d = d[d.date >= start]
-    if end:
-        d = d[d.date <= end]
-    cols = ["date", "risk_3d", "risk_7d", "bloom_in_3d", "bloom_in_7d", "is_bloom_today", "toxic_risk_7d"]
-    return clean(d[[c for c in cols if c in d.columns]].sort_values("date"))
+@lru_cache
+def toxic_by_month():
+    f = config.PROCESSED / "hafro_toxic.parquet"
+    if not f.exists():
+        return {}
+    t = pd.read_parquet(f)
+    g = t.groupby(t.date.dt.month).any_above.agg(["mean", "size"])
+    return {int(m): (float(r["mean"]), int(r["size"])) for m, r in g.iterrows()}
 
 
-@app.get("/api/metrics")
-def metrics():
-    """Model scores vs baselines (test years) + validation results."""
+def truthy(v):
+    return bool(v is True or (isinstance(v, (int, float, np.bool_, np.integer, np.floating)) and v == 1))
+
+
+# ---------------- plain-language explanations ----------------
+def explain(key, v):
+    """Turn a model input and its value into one short sentence."""
+    if v is None:
+        return None
+    f = {
+        "obs_bloom_7d": lambda v: "A bloom was seen on a clear day this past week" if v >= 0.5 else None,
+        "obs_anomaly": lambda v: f"Latest clear-sky chlorophyll was {10 ** v:.1f}× normal",
+        "obs_chl_log": lambda v: f"Latest clear-sky chlorophyll: {10 ** v:.1f} mg/m³",
+        "obs_age": lambda v: "Clear-sky view today" if int(v) == 0 else f"Last clear-sky view {int(v)} day{'s' if int(v) != 1 else ''} ago",
+        "fjord_chl_log": lambda v: f"High-resolution fjord view: {10 ** v:.1f} mg/m³",
+        "fjord_age": lambda v: f"Last fjord view {int(v)} days ago",
+        "anomaly_log": lambda v: f"Chlorophyll {10 ** v:.1f}× normal (5 days ago)",
+        "anomaly_7d_max": lambda v: f"Chlorophyll peaked at {10 ** v:.1f}× normal recently",
+        "chl_log": lambda v: f"Chlorophyll {10 ** v:.1f} mg/m³ (5 days ago)",
+        "chl_3d": lambda v: f"Chlorophyll around {10 ** v:.1f} mg/m³",
+        "chl_7d": lambda v: f"Weekly chlorophyll around {10 ** v:.1f} mg/m³",
+        "chl_change_3d": lambda v: f"Chlorophyll {'rising' if v > 0 else 'falling'} ({10 ** v:.1f}× in 3 days)",
+        "bloom_fraction": lambda v: f"{v:.0%} of nearby sea showed bloom levels",
+        "candidate_today": lambda v: "Bloom-like signal nearby" if v >= 0.5 else None,
+        "days_since_candidate": lambda v: f"Last bloom signal {int(v)} days ago" if v < 120 else "No bloom signal for months",
+        "obs_today": lambda v: "Clear-sky view today" if v >= 0.5 else None,
+        "sst": lambda v: f"Sea temperature {v:.1f} °C",
+        "sst_anomaly": lambda v: f"Sea {abs(v):.1f} °C {'warmer' if v > 0 else 'colder'} than normal",
+        "sst_change_7d": lambda v: f"Sea {'warmed' if v > 0 else 'cooled'} {abs(v):.1f} °C this week",
+        "salinity": lambda v: f"Salinity {v:.1f} PSU" + (" (fresh surface water)" if v < 34.5 else ""),
+        "salinity_change_7d": lambda v: f"Surface water {'freshening' if v < 0 else 'getting saltier'} this week",
+        "mixed_layer": lambda v: f"Surface layer {v:.0f} m deep" + (" (calm, layered water)" if v < 25 else ""),
+        "mixed_layer_change_7d": lambda v: f"Surface layer {'shallowing' if v < 0 else 'deepening'} this week",
+        "current_speed": lambda v: f"Currents {v:.2f} m/s",
+        "wave_height": lambda v: f"Waves {v:.1f} m",
+        "wind_7d": lambda v: f"{'Light' if v < 5 else 'Strong' if v > 9 else 'Moderate'} winds this week ({v:.0f} m/s)",
+        "sunlight_7d": lambda v: f"{'Sunny' if v > 90 else 'Dull'} week ({v:.0f} MJ/m² of sunlight)",
+        "air_temp_7d": lambda v: f"Air temperature {v:.0f} °C this week",
+        "rain_7d": lambda v: f"{v:.0f} mm of rain this week",
+        "doy_sin": lambda v: "Time of year (bloom season)", "doy_cos": lambda v: "Time of year (bloom season)",
+    }.get(key)
+    try:
+        return f(v) if f else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+# ---------------- endpoints ----------------
+@app.get("/api/config")
+def app_config():
+    m = manifest()
+    layers = {}
+    for k, v in m["layers"].items():
+        if k == "chl300":
+            continue
+        title, desc, role = LAYER_INFO.get(k, (v["label"], "", ""))
+        layers[k] = {**v, "title": title, "description": desc, "role": role}
+    return {"layers": layers, "chl300": m["layers"].get("chl300"), "years": m.get("years"),
+            "risk": {"low": config.RISK_LOW, "high": config.RISK_HIGH},
+            "rule": {"percentile": config.BLOOM_PERCENTILE, "ratio": config.BLOOM_RATIO,
+                     "min_chl": config.BLOOM_MIN_CHL, "area": config.BLOOM_SITE_FRACTION,
+                     "radius_km": config.SITE_RADIUS_KM, "baseline": list(config.BASELINE_YEARS)}}
+
+
+@app.get("/api/farms")
+def farms():
+    """Marine farms with their licence polygon."""
+    geo = json.loads(config.FARMS_FILE.read_text()) if config.FARMS_FILE.exists() else {"features": []}
+    poly = {f["properties"].get("point"): f["geometry"] for f in geo["features"] if f["properties"].get("point")}
+    keys = ["name", "farm", "kind", "lat", "lon", "company", "licence", "area", "region", "species",
+            "biomass_limit_t", "in_use", "status"]
+    return [{**{k: f.get(k) for k in keys}, "geometry": poly.get(f["name"])} for f in config.FARMS]
+
+
+@app.get("/api/day")
+def day(date: str):
+    """Status of every farm on one date: in a bloom? forecast risk?"""
+    d = pd.Timestamp(date)
+    s = series()
+    try:
+        today = s.xs(d, level="date")
+    except KeyError:
+        today = pd.DataFrame()
+    fc = forecast()
+    try:
+        ftoday = fc.xs(d, level="date") if not fc.empty else pd.DataFrame()
+    except KeyError:
+        ftoday = pd.DataFrame()
     out = {}
-    for name, f in [("bloom", config.DATA / "models" / "bloom_metrics.json"),
-                    ("toxic", config.DATA / "models" / "toxic_metrics.json"),
-                    ("validation", config.PROCESSED / "validation.json")]:
-        out[name] = json.loads(f.read_text()) if f.exists() else None
+    for name in FARM_NAMES:
+        r = {"bloom": False, "milky": False, "data": False}
+        if name in today.index:
+            t = today.loc[name]
+            r.update(bloom=truthy(t.get("is_bloom")), milky=truthy(t.get("is_cocco")),
+                     data=bool(pd.notna(t.get("chl"))), ratio=clean_value(t.get("chl_anomaly_ratio"), 2))
+        if name in ftoday.index:
+            f = ftoday.loc[name]
+            r.update(risk_3d=clean_value(f.risk_3d, 3), risk_7d=clean_value(f.risk_7d, 3),
+                     level_3d=f.level_3d, level_7d=f.level_7d)
+        out[name] = r
     return out
 
 
-@app.get("/api/snapshot")
-def snapshot(date: str):
-    """All sites' values on one date (for marker tooltips)."""
-    df = series()
-    df = df[df.date == pd.Timestamp(date)]
-    cols = [c for c in ["site", "chl", "chl_300m", "sst", "rrs555", "haptophytes", "diatoms",
-                        "chl_anomaly_ratio", "is_bloom", "is_cocco"] if c in df.columns]
-    return {r["site"]: {k: (None if pd.isna(r[k]) else round(float(r[k]), 3)) for k in cols[1:]}
-            for r in df[cols].to_dict("records")}
+@app.get("/api/timeline")
+def timeline(year: int):
+    """Per day of a year: how many farms were in a bloom / at high forecast risk (for the time bar)."""
+    s = series().reset_index()
+    s = s[s.site.isin(FARM_NAMES) & (s.date.dt.year == year)]
+    g = s.groupby("date").agg(bloom=("is_bloom", lambda x: int(x.map(truthy).sum())),
+                              milky=("is_cocco", lambda x: int(x.map(truthy).sum())),
+                              data=("chl", lambda x: int(x.notna().sum())))
+    fc = forecast()
+    if not fc.empty:
+        f = fc.reset_index()
+        f = f[f.site.isin(FARM_NAMES) & (f.date.dt.year == year)]
+        g = g.join(f.groupby("date").agg(high=("level_3d", lambda x: int((x == "high").sum()))))
+    g = g.fillna(0).reset_index()
+    g["date"] = g.date.dt.strftime("%Y-%m-%d")
+    return {"farms": len(FARM_NAMES), "days": g.to_dict("records")}
 
 
-TILES.mkdir(parents=True, exist_ok=True)  # lets the app start before any data is processed
-app.mount("/tiles", StaticFiles(directory=TILES), name="tiles")
+@lru_cache
+def calibration():
+    """How often a bloom really followed, by forecast risk level (walk-forward, out of sample)."""
+    fc = forecast()
+    if fc.empty:
+        return None
+    f = fc.reset_index()
+    f = f[f.site.isin(FARM_NAMES)]
+    out = {}
+    for h in config.HORIZONS:
+        d = f.dropna(subset=[f"bloom_in_{h}d"])
+        bins = [0, 0.1, 0.3, 0.6, 0.8, 1.01]
+        lab = ["0–10%", "10–30%", "30–60%", "60–80%", "80–100%"]
+        d = d.assign(b=pd.cut(d[f"risk_{h}d"], bins, labels=lab, right=False))
+        t = d.groupby("b", observed=False)[f"bloom_in_{h}d"].agg(["mean", "size"])
+        blooms = d[d[f"bloom_in_{h}d"] == 1]
+        out[f"{h}d"] = {
+            "buckets": [{"range": k, "observed": clean_value(r["mean"], 3), "n": int(r["size"])} for k, r in t.iterrows()],
+            "caught_medium_or_high": clean_value((blooms[f"risk_{h}d"] >= config.RISK_LOW).mean(), 3),
+            "high_precision": clean_value(d[d[f"risk_{h}d"] >= config.RISK_HIGH][f"bloom_in_{h}d"].mean(), 3),
+            "years": f"{int(d.date.dt.year.min())}–{int(d.date.dt.year.max())}", "n": int(len(d)),
+        }
+    return out
+
+
+@app.get("/api/confidence")
+def confidence():
+    m = {}
+    for name, f in [("bloom", config.DATA / "models" / "bloom_metrics.json"),
+                    ("toxic", config.DATA / "models" / "toxic_metrics.json"),
+                    ("validation", config.PROCESSED / "validation.json")]:
+        m[name] = json.loads(f.read_text()) if f.exists() else None
+    m["calibration"] = calibration()
+    return m
+
+
+def bucket_note(h, risk):
+    c = calibration()
+    if not c or risk is None:
+        return None
+    for b in c[f"{h}d"]["buckets"]:
+        lo, hi = [float(x.strip("%")) / 100 for x in b["range"].split("–")]
+        if lo <= risk < hi + 1e-9 and b["observed"] is not None:
+            return {"range": b["range"], "observed": b["observed"], "n": b["n"], "years": c[f"{h}d"]["years"]}
+    return None
+
+
+@app.get("/api/farm")
+def farm(name: str, date: str):
+    if name not in FARM_NAMES:
+        raise HTTPException(404, f"unknown farm {name}")
+    d = pd.Timestamp(date)
+    info = next(f for f in config.FARMS if f["name"] == name)
+    s = series().loc[name]
+    row = s.loc[d] if d in s.index else None
+
+    def g(k):
+        return clean_value(row.get(k)) if row is not None and k in row else None
+
+    # --- today's conditions (the model inputs) ---
+    win = s.loc[d - pd.Timedelta(days=60): d]
+
+    def spark(col):
+        return [clean_value(v, 3) for v in win[col]] if col in win else []
+    inputs = [
+        {"key": "chl", "label": "Chlorophyll", "value": g("chl"), "unit": "mg/m³", "spark": spark("chl")},
+        {"key": "anomaly", "label": "Vs normal", "value": g("chl_anomaly_ratio"), "unit": "×", "spark": spark("chl_anomaly_ratio")},
+        {"key": "sst", "label": "Sea temperature", "value": g("sst"), "unit": "°C", "spark": spark("sst")},
+        {"key": "salinity", "label": "Salinity", "value": g("salinity"), "unit": "PSU", "spark": spark("salinity")},
+        {"key": "mixed_layer", "label": "Surface layer", "value": g("mixed_layer"), "unit": "m", "spark": spark("mixed_layer")},
+        {"key": "currents", "label": "Currents", "value": g("current_speed"), "unit": "m/s", "spark": spark("current_speed")},
+        {"key": "waves", "label": "Waves", "value": g("wave_height"), "unit": "m", "spark": spark("wave_height")},
+        {"key": "wind", "label": "Wind", "value": g("wind_speed_10m_mean"), "unit": "m/s", "spark": spark("wind_speed_10m_mean")},
+        {"key": "sun", "label": "Sunlight", "value": g("shortwave_radiation_sum"), "unit": "MJ/m²", "spark": spark("shortwave_radiation_sum")},
+    ]
+
+    # --- how we decide it is a bloom: the rule, applied to this farm on this date ---
+    allev = events()
+    ev = allev[(allev.site == name) & (allev.start <= d) & (allev.end >= d)]
+    hb = ev[ev.kind == "high-biomass"]
+    e = hb.sort_values("status").iloc[0] if len(hb) else None
+    # inside a bloom: test it on its peak day (that is how it was detected); otherwise test today
+    ref = s.loc[e.peak_date] if e is not None and e.peak_date in s.index else row
+
+    def gr(k):
+        return clean_value(ref.get(k)) if ref is not None and k in ref else None
+    chl, thr, ratio, frac = gr("chl"), gr("chl_threshold"), gr("chl_anomaly_ratio"), gr("bloom_fraction")
+    checks = None
+    if chl is not None:
+        checks = {"bloom": truthy(row.get("is_bloom")) if row is not None else False,
+                  "on": e.peak_date.strftime("%Y-%m-%d") if e is not None else date, "steps": [
+            {"label": f"Algae above {config.BLOOM_MIN_CHL:g} mg/m³", "value": f"{chl:.1f} mg/m³",
+             "ok": chl >= config.BLOOM_MIN_CHL},
+            {"label": f"At least {config.BLOOM_RATIO:g}× the normal level", "value": f"{ratio:.1f}× normal" if ratio else "–",
+             "ok": bool(ratio and ratio >= config.BLOOM_RATIO)},
+            {"label": f"Rarer than {config.BLOOM_PERCENTILE}% of days on this date (1998–2022)",
+             "value": f"limit {thr:.1f} mg/m³" if thr else "–", "ok": bool(thr and chl >= thr)},
+            {"label": f"Covers ≥{config.BLOOM_SITE_FRACTION:.0%} of the sea within {config.SITE_RADIUS_KM} km",
+             "value": f"{frac:.0%}" if frac is not None else "–",
+             "ok": bool(frac is not None and frac >= config.BLOOM_SITE_FRACTION)},
+            {"label": "Lasts at least 3 days", "value": f"{int(e.days)} days" if e is not None else "–",
+             "ok": bool(e is not None and e.days >= 3)},
+            {"label": "Seen by the satellite on a clear day",
+             "value": f"{int(e.observed_days)} clear day{'s' if e.observed_days != 1 else ''}" if e is not None else "–",
+             "ok": bool(e is not None and e.observed_days > 0)},
+        ]}
+    # milky-water (coccolithophore) test, shown when that is what is happening
+    mk = ev[ev.kind == "coccolithophore"]
+    milky_checks = None
+    if len(mk) or truthy(row.get("cocco_day")) if row is not None else False:
+        e = mk.iloc[0] if len(mk) else None
+        rrs = g("rrs555")
+        normal = s[s.index.month == d.month]["rrs555"].median()
+        ratio_r = rrs / normal if rrs is not None and normal and normal > 0 else None
+        secchi = s[s.index.month.isin(range(3, 11))]["secchi"].median()
+        milky_checks = {"bloom": truthy(row.get("is_cocco")) if row is not None else False, "steps": [
+            {"label": "Very bright green light (≥ 0.008 sr⁻¹)", "value": f"{rrs:.4f}" if rrs is not None else "cloudy today",
+             "ok": bool(rrs is not None and rrs >= 0.008)},
+            {"label": f"At least 3× this farm's normal for {d.strftime('%B')}", "value": f"{ratio_r:.1f}×" if ratio_r else "–",
+             "ok": bool(ratio_r and ratio_r >= 3)},
+            {"label": "Clear water, not muddy (Secchi ≥ 5 m)", "value": f"{secchi:.0f} m" if pd.notna(secchi) else "–",
+             "ok": bool(pd.notna(secchi) and secchi >= 5)},
+            {"label": "In coccolithophore season (May–Oct)", "value": d.strftime("%B"), "ok": 5 <= d.month <= 10},
+            {"label": "Seen on at least 2 clear days", "value": f"{int(e.observed_days)} clear days" if e is not None else "–",
+             "ok": bool(e is not None and e.observed_days >= 2)},
+        ]}
+    current = None
+    if len(ev):
+        e = ev.sort_values("status").iloc[0]
+        current = {"kind": e.kind, "start": e.start.strftime("%Y-%m-%d"), "end": e.end.strftime("%Y-%m-%d"),
+                   "days": int(e.days), "day": int((d - e.start).days) + 1, "status": e.status,
+                   "type": e.type, "peak_chl": clean_value(e.peak_chl, 1), "peak_ratio": clean_value(e.peak_ratio, 1),
+                   "reason": e.reason}
+
+    hist = allev[(allev.site == name) & (allev.status == "confirmed")].sort_values("start", ascending=False)
+    history = [{"kind": e.kind, "start": e.start.strftime("%Y-%m-%d"), "peak": e.peak_date.strftime("%Y-%m-%d"),
+                "days": int(e.days), "peak_chl": clean_value(e.peak_chl, 1), "peak_ratio": clean_value(e.peak_ratio, 1),
+                "type": e.type} for e in hist.itertuples()]
+
+    # --- forecast issued on this date ---
+    fc = forecast()
+    fcast = None
+    if not fc.empty and (name, d) in fc.index:
+        f = fc.loc[(name, d)]
+        fcast = {"trained_until": int(f.model_trained_until)}
+        for h in config.HORIZONS:
+            facs = []
+            for x in json.loads(f[f"factors_{h}d"]):
+                t = explain(x.get("key"), x.get("value"))
+                if t and t not in [y["text"] for y in facs]:
+                    facs.append({"text": t, "push": x.get("push")})
+            fcast[f"{h}d"] = {"risk": clean_value(f[f"risk_{h}d"], 3), "level": f[f"level_{h}d"],
+                              "factors": facs, "happened": clean_value(f[f"bloom_in_{h}d"]),
+                              "confidence": bucket_note(h, float(f[f"risk_{h}d"]))}
+        fs = fc.loc[name].loc[d - pd.Timedelta(days=60): d + pd.Timedelta(days=21)]
+        fcast["series"] = {"date": [x.strftime("%Y-%m-%d") for x in fs.index],
+                           "risk_3d": [clean_value(v, 3) for v in fs.risk_3d],
+                           "risk_7d": [clean_value(v, 3) for v in fs.risk_7d],
+                           "bloom": [int(v) for v in fs.is_bloom_today]}
+
+    toxic = None
+    if info["kind"] == "shellfish":
+        tm = toxic_by_month().get(d.month)
+        if tm:
+            toxic = {"month_share": round(tm[0], 3), "samples": tm[1]}
+
+    return {"info": info, "date": date, "inputs": inputs, "spark_dates": [x.strftime("%Y-%m-%d") for x in win.index],
+            "checks": checks, "milky_checks": milky_checks, "current": current, "history": history,
+            "forecast": fcast, "toxic": toxic}
+
+
+@lru_cache(maxsize=64)
+def stream_year(stream, year):
+    f = config.RAW / f"{stream}_iceland_{year}.nc"
+    return xr.open_dataset(f) if f.exists() else None
+
+
+@lru_cache
+def clim():
+    return xr.open_dataset(config.PROCESSED / "chl_clim.nc")
+
+
+@app.get("/api/value")
+def value(layer: str, date: str, lat: float, lon: float):
+    """Value of a map layer under the cursor."""
+    if layer not in VALUE_SRC:
+        raise HTTPException(404, "unknown layer")
+    stream, var, how = VALUE_SRC[layer]
+    d = pd.Timestamp(date)
+    ds = stream_year(stream, d.year)
+    if ds is None:
+        return {"value": None}
+    try:
+        pt = ds.sel(latitude=lat, longitude=lon, method="nearest")
+        if abs(float(pt.latitude) - lat) > 0.1 or abs(float(pt.longitude) - lon) > 0.2:
+            return {"value": None}
+        sel = pt.sel(time=d, method="nearest")
+        if abs((pd.Timestamp(sel.time.values).normalize() - d).days) > 0:
+            return {"value": None}
+        v = float(np.squeeze(sel[var].values))
+        if how == "kelvin":
+            v -= 273.15
+        elif how == "speed":
+            v = float(np.hypot(v, np.squeeze(sel["vo"].values)))
+        elif how == "anomaly":
+            c = clim()["log10_chl_clim"].sel(doy=d.dayofyear, latitude=lat, longitude=lon, method="nearest")
+            v = v / 10 ** float(c)
+    except (KeyError, ValueError):
+        return {"value": None}
+    return {"value": clean_value(v)}
+
+
+app.mount("/tiles", StaticFiles(directory=TILES, check_dir=False), name="tiles")
 app.mount("/", StaticFiles(directory=config.WEB, html=True), name="web")
