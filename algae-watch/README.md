@@ -22,15 +22,17 @@ The web app shows:
 | Bloom type | Signal | When it counts as **confirmed** |
 |---|---|---|
 | **Spring bloom** (natural, yearly) | Shifted Gaussian fitted to Mar–Jul chlorophyll (Zhai et al. 2012) | Fit r² > 0.3 |
-| **High-biomass bloom** (where fish-killing blooms would show) | Chlorophyll **≥ 2.5× normal** (1998–2022 median for that pixel and date, ±15 days) **and ≥ 3 mg/m³** on ≥ 10% of the sea within 10 km | Lasts **≥ 3 days**, is seen on **≥ 1 clear day** by a real (not gap-filled) observation, and the water is not murky (Secchi depth ≥ 5 m). Otherwise it is a *candidate*. |
+| **High-biomass bloom** (where fish-killing blooms would show) | Chlorophyll **above the 95th percentile** for that pixel and date (1998–2022, ±15 days), **≥ 2.5× the median and ≥ 3 mg/m³**, on ≥ 10% of the sea within 10 km. A fixed "2.5× normal" rule alone fired on 17.5% of summer days, because coastal chlorophyll varies about 2.4× from day to day. | Lasts **≥ 3 days**, is seen on **≥ 1 clear day** by a real (not gap-filled) observation, and the water is not murky (Secchi depth ≥ 5 m). Otherwise it is a *candidate*. |
 | **Coccolithophore bloom** (milky water, *E. huxleyi*) | 555 nm reflectance **≥ 0.008 sr⁻¹ and ≥ 3×** the site's normal for that month, May–Oct | Seen on **≥ 2 clear days** |
 | **Toxic algae** (*Dinophysis*, *Alexandrium*, *Pseudo-nitzschia*) | Not visible from space | A **7-day risk forecast** trained on Hafró samples (see below) |
 
 The algae type (diatoms, haptophytes, dinoflagellates) comes from Copernicus' satellite algae-group product. It is an estimate, not an identification.
 
 ## Validation (`src/validate.py`)
+Current result: confirmed blooms cover 3.8% of Apr–Sep days, about 1.6 per site per year.
 - **Documented events** (`validation/documented_events.csv`): the Sep 2022 Westfjords *E. huxleyi* bloom, which Hafró sampled at 4.7–6.3 million cells/L, shows up clearly as milky water (555 nm reflectance 0.013–0.022 against a normal of ~0.002) from 3 Sep onward. Chlorophyll alone misses it, which is why it gets its own detector.
-- **Hafró toxic samples vs satellite blooms:** a satellite bloom appeared near only 2% of toxic samples and 3% of clean ones. Toxic algae and chlorophyll blooms are different things, so a separate forecast is needed.
+- **Detector check:** the coccolithophore detector flags Arnarfjörður from 3 Sep 2022 as a **confirmed** milky-water bloom. Spring 2021 (salmon losses, fjords not named) shows only as a candidate.
+- **Hafró toxic samples vs satellite blooms:** a satellite bloom appeared near 10% of toxic samples and 9% of clean ones. Toxic algae and chlorophyll blooms are different things, so a separate forecast is needed.
 - **Spring-bloom timing vs literature:** median peak around the end of May across 82 site-years. Gudmundsson (1998) found the bloom usually peaks in May.
 
 ## Toxic-algae forecast (`src/scrape_hafro.py`, `src/train_toxic.py`)
