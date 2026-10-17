@@ -1,0 +1,15 @@
+copernicusmarine>=2.0
+xarray
+netCDF4
+h5netcdf
+dask
+pandas
+pyarrow
+numpy
+scipy
+requests
+lightgbm
+scikit-learn
+matplotlib
+fastapi
+uvicorn[standard]

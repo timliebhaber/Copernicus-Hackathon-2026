@@ -1,0 +1,7 @@
+data/
+models/
+.venv/
+.env
+.cdsapirc
+__pycache__/
+data_sample/

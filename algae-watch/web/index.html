@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AlgaeWatch Iceland</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <strong>AlgaeWatch Iceland</strong>
+      <span class="muted">Satellite view of algal blooms around Iceland</span>
+    </div>
+    <nav class="tabs" aria-label="Sections">
+      <button class="tab active" data-tab="data">Data</button>
+      <button class="tab" data-tab="blooms">Blooms</button>
+      <button class="tab" disabled title="Step 4">Model</button>
+      <button class="tab" disabled title="Step 5">Forecast</button>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="mapwrap">
+      <div id="map"></div>
+
+      <div class="card layers" id="layerCard">
+        <label for="layerSelect" class="label">Map layer</label>
+        <select id="layerSelect"></select>
+        <label class="check"><input type="checkbox" id="fjordToggle" checked> Fjord detail (300 m)</label>
+        <div id="legend" class="legend"></div>
+        <div id="layerNote" class="note"></div>
+      </div>
+
+      <div class="card timebar">
+        <button id="playBtn" class="btn" aria-label="Play">▶</button>
+        <button id="prevBtn" class="btn" aria-label="Previous day">‹</button>
+        <input type="range" id="dateSlider" min="0" max="0" value="0" aria-label="Date">
+        <button id="nextBtn" class="btn" aria-label="Next day">›</button>
+        <input type="date" id="datePicker" aria-label="Pick date">
+      </div>
+    </section>
+
+    <aside class="panel" id="panel" data-tab="data">
+      <div id="panelEmpty" class="empty">
+        <h2>Pick a site</h2>
+        <p class="only-data">Click a fjord marker on the map to see its daily chlorophyll, algae groups, sea temperature and weather.</p>
+        <div class="only-blooms">
+          <p>Click a fjord marker to see its bloom history. A <b>bloom</b> is when chlorophyll is at least <b>2.5× the normal</b> level for that place and time of year (median 1998–2022) <b>and</b> at least 3 mg/m³, on ≥10% of the sea within 10 km.</p>
+          <p class="small muted">Markers turn red with “· bloom” on days a bloom is detected. Each event is labelled with algae type (from the satellite algae-group product, 2016+) and confidence (high = seen by a real cloud-free observation; low = murky water such as Hvalfjörður).</p>
+        </div>
+        <div class="kindkey">
+          <span><i class="dot salmon"></i> Salmon farming fjord</span>
+          <span><i class="dot shellfish"></i> Shellfish area (toxin monitoring)</span>
+        </div>
+        <p class="muted small">Site markers are <b>approximate placeholders</b> (mid-fjord points), not licensed farm coordinates.</p>
+        <div id="overview" class="only-blooms"></div>
+      </div>
+      <div id="panelSite" hidden>
+        <div class="panelhead">
+          <div>
+            <h2 id="siteName"></h2>
+            <div class="muted small" id="siteMeta"></div>
+          </div>
+          <button class="btn" id="closePanel" aria-label="Close">✕</button>
+        </div>
+        <div class="stats" id="stats"></div>
+        <div id="eventList" class="only-blooms block"></div>
+        <div class="seg" role="group" aria-label="Chart window">
+          <button class="on" data-window="season">6 months around date</button>
+          <button data-window="all">All of 2023–2024</button>
+        </div>
+        <div id="charts"></div>
+        <div class="only-blooms">
+          <div id="siteCalendar" class="block"></div>
+          <div class="block">
+            <h3>Spring bloom timing per year</h3>
+            <div class="sub" id="phenoNote"></div>
+            <div class="lgd"><span><i style="background:var(--series-1)"></i>Bloom start</span><span><i style="background:var(--series-2)"></i>Bloom peak</span></div>
+            <div class="canvas" style="height:160px"><canvas id="phenoCanvas"></canvas></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="disclaimer">
+    Prototype. Shows high-biomass blooms from satellite chlorophyll, not toxicity. Toxic species (Dinophysis, Alexandrium, Pseudo-nitzschia) are only detected by
+    <a href="https://www.hafogvatn.is/is/rannsoknir/voktun-eiturthorunga" target="_blank" rel="noopener">Hafró/MAST water sampling</a>.
+    Not for operational decisions. Data: Copernicus Marine, Open-Meteo (ERA5).
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

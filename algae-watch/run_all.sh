@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Run the whole pipeline.  ./run_all.sh sample   -> 2023-2024 only (~10 min, ~1 GB, data_sample/)
+#                          ./run_all.sh full     -> 1998-2025 (~8 GB, data/)
+set -euo pipefail
+cd "$(dirname "$0")"
+export ALGAE_PROFILE="${1:-sample}"
+PY=.venv/bin/python
+[ -x "$PY" ] || { echo "Create the env first: uv venv --python 3.12 .venv && uv pip install -p .venv -r requirements.txt"; exit 1; }
+echo "== profile: $ALGAE_PROFILE"
+$PY src/download_copernicus.py
+$PY src/download_copernicus.py --streams chl300
+$PY src/download_weather.py
+$PY src/build_site_series.py
+$PY src/detect_blooms.py
+$PY src/make_tiles.py
+echo "== done. Start the app with:  ALGAE_PROFILE=$ALGAE_PROFILE .venv/bin/uvicorn api.main:app"
