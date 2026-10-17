@@ -83,7 +83,8 @@ POINTS = SITES + HAFRO_STATIONS
 SITE_RADIUS_KM = 10
 
 # Bloom detection
-BLOOM_RATIO = 2.5          # chl >= ratio * climatology
+BLOOM_PERCENTILE = 95      # chl above this percentile of the pixel's 1998-2022 values for the date ...
+BLOOM_RATIO = 2.5          # ... and >= ratio * climatology (median)
 BLOOM_MIN_CHL = 3.0        # mg/m3 absolute floor
 BLOOM_SITE_FRACTION = 0.10 # share of valid pixels in radius
 CLIM_WINDOW_DAYS = 15

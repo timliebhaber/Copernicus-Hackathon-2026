@@ -2,7 +2,8 @@
 
 1. Climatology: per 4 km pixel and day of year, median log10 chlorophyll (+-15 days) over
    config.BASELINE_YEARS.                                    -> data/processed/chl_clim.nc
-2. Bloom pixel: chl >= BLOOM_RATIO x climatology AND chl >= BLOOM_MIN_CHL.
+2. Bloom pixel: chl above the pixel's BLOOM_PERCENTILE for the date (rare: ~1 in 20 days) AND
+   >= BLOOM_RATIO x climatology AND >= BLOOM_MIN_CHL.
    Site-day bloom: >= BLOOM_SITE_FRACTION of valid pixels around the site are bloom pixels.
 3. Events, two kinds:
    - high-biomass: runs of bloom days. CONFIRMED only if it lasts >= 3 days, is seen on >= 1 clear
@@ -52,8 +53,11 @@ def chl_files(years=None):
 # ---------- 1. climatology ----------
 def build_climatology():
     if CLIM_FILE.exists():
-        print(f"[cached] {CLIM_FILE.name}")
-        return xr.open_dataset(CLIM_FILE)
+        c = xr.open_dataset(CLIM_FILE)
+        if "log10_chl_high" in c and c.attrs.get("high_percentile") == config.BLOOM_PERCENTILE:
+            print(f"[cached] {CLIM_FILE.name}")
+            return c
+        c.close()
     files = chl_files(config.BASELINE_YEARS)
     print(f"climatology from {len(files)} years ({files[0].stem[-4:]}-{files[-1].stem[-4:]})")
     arrs, doys = [], []
@@ -65,6 +69,7 @@ def build_climatology():
         ds.close()
     data, doy = np.concatenate(arrs), np.concatenate(doys)
     clim = np.full((366, len(lat), len(lon)), np.nan, np.float32)
+    high = np.full((366, len(lat), len(lon)), np.nan, np.float32)
     w = config.CLIM_WINDOW_DAYS
     for d in range(1, 367):
         dist = np.abs(doy - d)
@@ -72,9 +77,12 @@ def build_climatology():
         block = data[sel]
         if np.isfinite(block).any():
             clim[d - 1] = np.nanmedian(block, axis=0)
-    out = xr.Dataset({"log10_chl_clim": (("doy", "latitude", "longitude"), clim)},
+            high[d - 1] = np.nanpercentile(block, config.BLOOM_PERCENTILE, axis=0)
+    out = xr.Dataset({"log10_chl_clim": (("doy", "latitude", "longitude"), clim),
+                      "log10_chl_high": (("doy", "latitude", "longitude"), high)},
                      coords={"doy": np.arange(1, 367), "latitude": lat, "longitude": lon},
-                     attrs={"baseline_years": str(config.BASELINE_YEARS), "window_days": w})
+                     attrs={"baseline_years": str(config.BASELINE_YEARS), "window_days": w,
+                            "high_percentile": config.BLOOM_PERCENTILE})
     out.to_netcdf(CLIM_FILE)
     print(f"saved {CLIM_FILE}")
     return out
@@ -83,6 +91,7 @@ def build_climatology():
 # ---------- 2. bloom flags per site ----------
 def site_bloom_series(clim):
     clim_lin = 10 ** clim["log10_chl_clim"].values
+    high_lin = 10 ** clim["log10_chl_high"].values
     rows = []
     masks = None
     for f in chl_files():
@@ -91,8 +100,8 @@ def site_bloom_series(clim):
             masks = {s["name"]: common.site_mask(ds, s) for s in config.POINTS}
         chl = ds["CHL"].values
         c = clim_lin[ds.time.dt.dayofyear.values - 1]
-        ratio = chl / c
-        bloom = (ratio >= config.BLOOM_RATIO) & (chl >= config.BLOOM_MIN_CHL)
+        thr = np.maximum(high_lin[ds.time.dt.dayofyear.values - 1], config.BLOOM_RATIO * c)
+        bloom = (chl >= thr) & (chl >= config.BLOOM_MIN_CHL)
         valid = np.isfinite(chl)
         t = pd.to_datetime(ds.time.values).normalize()
         for name, m in masks.items():
@@ -100,6 +109,7 @@ def site_bloom_series(clim):
             rows.append(pd.DataFrame({
                 "date": t, "site": name,
                 "chl_clim": np.nanmean(c[:, m], axis=1),
+                "chl_threshold": np.nanmean(thr[:, m], axis=1),
                 "bloom_fraction": np.where(nvalid > 0, bloom[:, m].sum(axis=1) / np.maximum(nvalid, 1), np.nan),
                 "valid_fraction": nvalid / m.sum(),
             }))
@@ -140,7 +150,7 @@ def label_events(b, s):
     df["candidate_bloom"] = df.bloom_fraction >= config.BLOOM_SITE_FRACTION
 
     def confirmed(x):  # a real (not gap-filled) observation also shows the bloom
-        return (x >= config.BLOOM_MIN_CHL) & (x >= config.BLOOM_RATIO * df.chl_clim)
+        return (x >= config.BLOOM_MIN_CHL) & (x >= df.chl_threshold)
     df["observed_bloom"] = confirmed(df.chl_obs) | confirmed(df.chl_300m)
 
     season = df[df.date.dt.month.between(3, 10)]
@@ -255,7 +265,7 @@ def main():
     s = pd.read_parquet(config.PROCESSED / "site_series.parquet")
     df, ev = label_events(b, s)
 
-    keep = ["date", "site", "chl", "chl_clim", "chl_anomaly_ratio", "bloom_fraction", "valid_fraction",
+    keep = ["date", "site", "chl", "chl_clim", "chl_threshold", "chl_anomaly_ratio", "bloom_fraction", "valid_fraction",
             "candidate_bloom", "is_bloom", "observed_bloom", "cocco_day", "is_cocco"]
     df[keep].to_parquet(config.PROCESSED / "blooms.parquet", index=False)
     ev.to_parquet(config.PROCESSED / "bloom_events.parquet", index=False)

@@ -28,11 +28,12 @@ DIVERGING = LinearSegmentedColormap.from_list("anom", ["#184f95", "#86b6ef", "#f
 CLIM = None
 
 
-def clim_for(doys):
+def clim_for(doys, var="log10_chl_clim"):
     global CLIM
     if CLIM is None:
-        CLIM = 10 ** xr.open_dataset(config.PROCESSED / "chl_clim.nc")["log10_chl_clim"].values
-    return CLIM[doys - 1]
+        ds = xr.open_dataset(config.PROCESSED / "chl_clim.nc")
+        CLIM = {v: 10 ** ds[v].values for v in ds.data_vars}
+    return CLIM[var][doys - 1]
 
 
 def chl(ds):
@@ -45,9 +46,11 @@ def anomaly(ds):
 
 def bloom(ds):
     c = ds["CHL"].values
-    r = c / clim_for(ds.time.dt.dayofyear.values)
-    out = np.where(np.isfinite(c), np.nan, np.nan)
-    hit = (r >= config.BLOOM_RATIO) & (c >= config.BLOOM_MIN_CHL)
+    doy = ds.time.dt.dayofyear.values
+    r = c / clim_for(doy)
+    thr = np.maximum(clim_for(doy, "log10_chl_high"), config.BLOOM_RATIO * clim_for(doy))
+    out = np.full(c.shape, np.nan)
+    hit = (c >= thr) & (c >= config.BLOOM_MIN_CHL)
     out[hit] = r[hit]
     return out, np.isfinite(c).any(axis=(1, 2))  # also report which days had data
 
@@ -58,7 +61,7 @@ LAYERS = {
     "anomaly": dict(file="chl_l4", get=anomaly, cmap=DIVERGING, norm=LogNorm(0.25, 4), units="× normal",
                     label="Chlorophyll vs normal for the date", ticks=[0.25, 0.5, 1, 2, 4]),
     "bloom": dict(file="chl_l4", get=bloom, cmap="Reds", norm=LogNorm(config.BLOOM_RATIO, 10), units="× normal",
-                  label=f"Detected bloom pixels (≥{config.BLOOM_RATIO}× normal and ≥{config.BLOOM_MIN_CHL:g} mg/m³)",
+                  label=f"Bloom pixels (above {config.BLOOM_PERCENTILE}th percentile, ≥{config.BLOOM_RATIO}× normal, ≥{config.BLOOM_MIN_CHL:g} mg/m³)",
                   ticks=[2.5, 4, 6, 10]),
     "chl_obs": dict(file="pft_l3", get=chl, cmap="Greens", norm=LogNorm(0.1, 20), units="mg/m³",
                     label="Chlorophyll-a (observed only, 4 km)", ticks=[0.1, 0.3, 1, 3, 10, 20]),

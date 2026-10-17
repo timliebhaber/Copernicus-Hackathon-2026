@@ -108,7 +108,9 @@ function preload(i) {
 
 // ---------- sites ----------
 const kindColor = (k) => css(k === "salmon" ? "--series-1" : k === "shellfish" ? "--series-2" : "--series-3");
-const LABEL_DIR = { "Reyðarfjörður": "left", "Fáskrúðsfjörður": "right", "Dýrafjörður": "top", "Patreksfjörður": "left" };
+const LABEL_DIR = { "Reyðarfjörður": "left", "Fáskrúðsfjörður": "right", "Dýrafjörður": "top", "Patreksfjörður": "left",
+  "Seyðisfjörður": "top", "Mjóifjörður eystri": "right", "Breiðafjörður": "top", "Breiðafjörður (Kiðey)": "bottom",
+  "Hvalfjörður (Eyrarkot)": "left", "Steingrímsfjörður": "right", "Stakksfjörður": "bottom" };
 function drawSites() {
   for (const s of state.sites) {
     const color = kindColor(s.kind);
@@ -535,6 +537,7 @@ function initTime() {
   const urlLayer = q.get("layer") && state.manifest.layers[q.get("layer")];
   if (urlLayer) state.layer = q.get("layer");
   initTime();
+  document.querySelector('[data-window="all"]').textContent = `All of ${state.dates[0].slice(0, 4)}–${state.dates.at(-1).slice(0, 4)}`;
   drawSites();
   setTab(state.tab, !!urlLayer);
   const start = state.dates.indexOf(q.get("date") || `${state.dates.at(-1).slice(0, 4)}-05-15`);
