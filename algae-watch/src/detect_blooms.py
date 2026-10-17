@@ -147,27 +147,35 @@ def gauss(t, b0, beta, h, tm, sigma):
 
 
 def fit_phenology(df):
+    """Fit on an 8-day running median (as in 8-day composites), reject fits stuck at a bound."""
     out = []
+    lo_b, hi_b = [0, -0.05, 0, 60, 6], [np.inf, 0.05, np.inf, 230, 60]
     for (site, year), g in df.groupby([df.site, df.date.dt.year]):
         g = g[(g.date.dt.dayofyear >= 60) & (g.date.dt.dayofyear <= 250)].dropna(subset=["chl"])
         if len(g) < 100:
             continue
-        t, y = g.date.dt.dayofyear.values.astype(float), g.chl.values
-        sm = pd.Series(y).rolling(7, center=True, min_periods=1).mean().values
-        i = np.argmax(sm[t <= 210]) if (t <= 210).any() else np.argmax(sm)
-        p0 = [np.nanpercentile(y, 10), 0, (sm[i] - np.nanpercentile(y, 10)) * 15 * 2.5, t[i], 15]
+        t = g.date.dt.dayofyear.values.astype(float)
+        y = pd.Series(g.chl.values).rolling(8, center=True, min_periods=4).median().values
+        ok = np.isfinite(y)
+        t, y = t[ok], y[ok]
+        base = np.nanpercentile(y, 10)
+        i = np.argmax(np.where(t <= 210, y, -np.inf))
+        p0 = [base, 0, (y[i] - base) * 20 * 2.5, t[i], 20]
         try:
-            p, _ = curve_fit(gauss, t, y, p0=p0, maxfev=20000,
-                             bounds=([0, -0.05, 0, 60, 3], [np.inf, 0.05, np.inf, 230, 60]))
+            p, _ = curve_fit(gauss, t, y, p0=p0, maxfev=20000, bounds=(lo_b, hi_b))
         except (RuntimeError, ValueError):
             continue
+        b0, beta, h, tm, sigma = p
+        if sigma < lo_b[4] * 1.05 or sigma > hi_b[4] * 0.95 or tm < 62 or tm > 228:
+            continue  # stuck at a bound: not a real spring bloom shape
         pred = gauss(t, *p)
         r2 = 1 - np.sum((y - pred) ** 2) / np.sum((y - y.mean()) ** 2)
-        b0, beta, h, tm, sigma = p
         out.append({"site": site, "year": int(year), "start_doy": tm - 1.96 * sigma, "peak_doy": tm,
                     "end_doy": tm + 1.96 * sigma, "duration_days": 2 * 1.96 * sigma,
                     "amplitude": h / (sigma * np.sqrt(2 * np.pi)), "r2": r2})
     ph = pd.DataFrame(out)
+    if ph.empty:
+        return ph
     base = ph[ph.year.between(*config.BASELINE_YEARS)].groupby("site")[["start_doy", "peak_doy", "amplitude"]].median()
     ph = ph.join(base, on="site", rsuffix="_normal")
     ph["start_anomaly_days"] = ph.start_doy - ph.start_doy_normal

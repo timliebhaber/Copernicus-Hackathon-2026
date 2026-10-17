@@ -359,8 +359,9 @@ async function setIdx(i) {
 }
 
 // ---------- tabs ----------
-function setTab(tab) {
+function setTab(tab, keepLayer = false) {
   state.tab = tab;
+  if (!keepLayer) state.layer = tab === "blooms" ? "bloom" : "chl";
   document.querySelectorAll(".tab[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   buildLayerSelect();
   renderLegend();
@@ -370,6 +371,7 @@ function setTab(tab) {
   const u = new URL(location); u.searchParams.set("tab", tab); history.replaceState(null, "", u);
 }
 document.querySelectorAll(".tab[data-tab]").forEach((b) => b.onclick = () => setTab(b.dataset.tab));
+const shortDate = (s) => new Date(s + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit", timeZone: "UTC" });
 
 const MONTHS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 
@@ -388,6 +390,7 @@ function jumpTo(dateStr) {
 async function renderOverview() {
   if (state.tab !== "blooms") { $("overview").innerHTML = ""; return; }
   if (!state.calendar) state.calendar = await (await fetch("/api/calendar")).json();
+  document.querySelectorAll(".baselineYears").forEach((el) => el.textContent = state.calendar.baseline.join("–"));
   const [y0, y1] = state.calendar.years;
   const years = []; for (let y = y0; y <= y1; y++) years.push(y);
   const by = {}; let max = 1;
@@ -421,7 +424,7 @@ function renderEvents() {
   $("eventList").innerHTML = `<h3>Bloom events since ${state.dates[0].slice(0, 4)} (${ev.length})</h3>
     <div class="sub">Click a row to jump to the bloom peak. Confidence: high = seen by a real (cloud-free) observation.</div>
     <div class="tablewrap"><table class="events"><thead><tr><th>Start</th><th>Days</th><th>Peak</th><th>×normal</th><th>Type</th><th>Confidence</th></tr></thead>
-    <tbody>${ev.map((e) => `<tr data-jump="${e.peak_date}"><td>${fmtDate(e.start)}</td><td>${e.days}</td>
+    <tbody>${ev.map((e) => `<tr data-jump="${e.peak_date}"><td class="nowrap">${shortDate(e.start)}</td><td>${e.days}</td>
       <td>${f(e.peak_chl)}</td><td>${f(e.peak_ratio)}</td><td>${e.type}</td>
       <td><span class="conf ${e.confidence.split(" ")[0]}">${e.confidence}</span></td></tr>`).join("") || `<tr><td colspan="6">No events detected</td></tr>`}</tbody></table></div>`;
   $("eventList").querySelectorAll("[data-jump]").forEach((tr) => tr.onclick = () => jumpTo(tr.dataset.jump));
@@ -433,8 +436,8 @@ function renderPhenology() {
   const ph = state.phenology.filter((p) => p.r2 > 0.3);
   const doyLabel = (v) => new Date(Date.UTC(2001, 0, v)).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
   $("phenoNote").textContent = ph.length
-    ? `Shifted-Gaussian fit to each spring (Zhai et al. 2012 method). ${ph.length} of ${state.phenology.length} years fit well (r² > 0.3). Normal start: ${doyLabel(Math.round(ph[0].start_doy_normal))}.`
-    : "Not enough data for a phenology fit here.";
+    ? `Shifted-Gaussian fit to each spring (Zhai et al. 2012 method). ${ph.length} year(s) fit well (r² > 0.3). Normal start: ${doyLabel(Math.round(ph[0].start_doy_normal))}. Years with several peaks (common inshore) are left out.`
+    : "No year with a single clear spring-bloom peak here. Inshore chlorophyll often has several peaks, which this method can't fit.";
   const years = ph.map((p) => p.year);
   phenoChart = new Chart($("phenoCanvas"), {
     type: "line",
@@ -487,10 +490,11 @@ function initTime() {
   const q = new URLSearchParams(location.search);
   if (q.get("view")) { const [la, lo, z] = q.get("view").split(",").map(Number); map.setView([la, lo], z); }
   if (q.get("tab") === "blooms") state.tab = "blooms";
-  if (q.get("layer") && state.manifest.layers[q.get("layer")]) state.layer = q.get("layer");
+  const urlLayer = q.get("layer") && state.manifest.layers[q.get("layer")];
+  if (urlLayer) state.layer = q.get("layer");
   initTime();
   drawSites();
-  setTab(state.tab);
+  setTab(state.tab, !!urlLayer);
   const start = state.dates.indexOf(q.get("date") || `${state.dates.at(-1).slice(0, 4)}-05-15`);
   await setIdx(start >= 0 ? start : 0);
   const site = state.sites.find((s) => s.name === q.get("site"));

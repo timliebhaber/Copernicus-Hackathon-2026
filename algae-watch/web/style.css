@@ -183,3 +183,4 @@ table.events tbody tr:hover { background: var(--page); }
 .conf.high::before { content: "✓ "; color: var(--good); }
 .conf.medium::before { content: "~ "; color: var(--warning); }
 .conf.low::before { content: "! "; color: var(--critical); }
+.nowrap { white-space: nowrap; }

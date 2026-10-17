@@ -122,7 +122,7 @@ def calendar():
     df = df[df.is_bloom == True]  # noqa: E712
     by_year = df.groupby(["site", df.date.dt.year]).size().rename("days").reset_index()
     by_month = df.groupby(["site", df.date.dt.month]).size().rename("days").reset_index()
-    return {"years": [config.FIRST_YEAR, config.LAST_YEAR],
+    return {"years": [config.FIRST_YEAR, config.LAST_YEAR], "baseline": list(config.BASELINE_YEARS),
             "by_year": records(by_year.rename(columns={"date": "year"})),
             "by_month": records(by_month.rename(columns={"date": "month"}))}
 
