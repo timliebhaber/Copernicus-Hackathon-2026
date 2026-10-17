@@ -63,6 +63,35 @@ All gains are statistically significant. For brand-new blooms, precision is stil
 - **Replay:** `predict.py` makes **walk-forward** forecasts. Each year is predicted by a model trained only on earlier years, so the app's Forecast tab shows what the system would really have said on any day from 2005 to 2025, including the top 3 factors behind each forecast. Example: `python src/predict.py --date 2025-05-16`.
 - **Coordinates:** every table in `data/processed/` has `lat`, `lon` and `kind` columns. These are the site or station coordinates (approximate placeholders); values are averaged over the ocean pixels around each point.
 
+## Experiment: forecasting *new* blooms (`src/build_ring_features.py`, `src/train_onset.py`)
+- **Target:** a confirmed bloom **starts** at a farm within 3 or 7 days. Only farm-days with no bloom in the past week count (566k farm-days).
+- **New inputs:**
+  - blooms seen in rings around the farm (0–10, 10–30, 30–60 km) and **upstream** (10–60 km, in the direction the current comes from)
+  - physical triggers: surface layer, salinity and temperature change over 14 days, calm wind over 3 days, sunlight vs normal
+- **Result (test 2019–2026): no improvement over the current model.**
+
+| | New-bloom model | Current model | Season |
+|---|---|---|---|
+| 3 days: ROC-AUC / PR-AUC | 0.72 / 0.06 | 0.71 / 0.05 | 0.63 / 0.04 |
+| 7 days: ROC-AUC / PR-AUC | 0.70 / 0.11 | 0.71 / 0.12 | 0.63 / 0.09 |
+
+New blooms happen on 3% (3 days) or 7% (7 days) of quiet farm-days. Both models beat the season, but the gain from the new model over the current one is not significant.
+- **Why it's hard:**
+  - Before a new bloom, chlorophyll is only slightly up (about 1.2× normal on the latest clear day) and the sea about 0.1 °C warmer.
+  - Blooms seen nearby or upstream rarely come first: blooms mostly grow in place, at the same time across a fjord area, rather than drifting in.
+  - The GLORYS surface layer is about 10 m in summer and barely changes, because the model doesn't resolve fjords.
+  - Clouds hide many of the days before onset.
+- **If a lower "watch" level were added to the current model** (quiet days, 2019–2026):
+
+| Threshold | Onsets warned in the week before | Alerts followed by a new bloom | Alert days per farm per season |
+|---|---|---|---|
+| 30% (today's "medium") | 15% | 14% | 4 |
+| 20% | 32% | 13% | 14 |
+| 15% | 56% | 13% | 33 |
+| 10% | 80% | 12% | 71 |
+
+  Warning more new blooms costs many false alarms: only about 1 in 8 alerts is followed by a bloom at any level. The app therefore keeps the current model. Better early warning would need in-situ data, such as farm water samples, buoys or Hafró phytoplankton counts.
+
 ## Toxic-algae forecast (`src/scrape_hafro.py`, `src/train_toxic.py`)
 - **Labels:** 917 Hafró monitoring samples from 7 stations (2005–2019). The scraper parses Hafró's Icelandic text to find which genus was above the shellfish-poisoning threshold.
 - **Inputs:** conditions at the station **7 days before** each sample: sea temperature and its anomaly, salinity, mixed layer, chlorophyll and its anomaly, wind, sunlight, rain, season, and the last known result.
