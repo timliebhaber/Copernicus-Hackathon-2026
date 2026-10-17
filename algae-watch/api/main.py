@@ -93,13 +93,44 @@ def manifest():
 
 
 @lru_cache
-def toxic_by_month():
+def toxic_table():
     f = config.PROCESSED / "hafro_toxic.parquet"
-    if not f.exists():
-        return {}
-    t = pd.read_parquet(f)
-    g = t.groupby(t.date.dt.month).any_above.agg(["mean", "size"])
-    return {int(m): (float(r["mean"]), int(r["size"])) for m, r in g.iterrows()}
+    return pd.read_parquet(f) if f.exists() else pd.DataFrame()
+
+
+GENUS = {"dsp": "dinophysis_above", "psp": "alexandrium_above", "asp": "pseudo_nitzschia_above"}
+
+
+def month_shares(t):
+    """Share of samples above the safe limit, per calendar month: any toxin and per toxin type."""
+    out = {}
+    for m, g in t.groupby(t.date.dt.month):
+        out[int(m)] = {"n": int(len(g)), "any": float(g.any_above.mean()),
+                       **{k: float(g[c].mean()) for k, c in GENUS.items()}}
+    return out
+
+
+@lru_cache
+def toxic_by_month():
+    t = toxic_table()
+    return month_shares(t) if len(t) else {}
+
+
+def nearest_station(lat, lon):
+    t = toxic_table()
+    if t.empty:
+        return None
+    st = min(config.HAFRO_STATIONS, key=lambda s: config._km(s, {"lat": lat, "lon": lon}))
+    g = t[t.station == st["name"]]
+    if g.empty:
+        return None
+    last = g.sort_values("date").iloc[-1]
+    counts = {k: int(g[c].sum()) for k, c in GENUS.items()}
+    ms = month_shares(g)
+    return {"name": st["name"], "km": round(config._km(st, {"lat": lat, "lon": lon}), 1), "samples": int(len(g)),
+            "years": f"{g.date.dt.year.min()}–{g.date.dt.year.max()}", "share_above": float(g.any_above.mean()),
+            "counts": counts, "last_date": last.date.strftime("%Y-%m-%d"), "last_above": bool(last.any_above),
+            "months": [ms.get(m, {}).get("any") for m in range(1, 13)]}
 
 
 def truthy(v):
@@ -411,10 +442,8 @@ def farm(name: str, date: str):
                            "bloom": [int(v) for v in fs.is_bloom_today]}
 
     toxic = None
-    if info["kind"] == "shellfish":
-        tm = toxic_by_month().get(d.month)
-        if tm:
-            toxic = {"month_share": round(tm[0], 3), "samples": tm[1]}
+    if info["kind"] == "shellfish":  # their main risk is toxins, which satellites cannot see
+        toxic = {"month": toxic_by_month().get(d.month), "station": nearest_station(info["lat"], info["lon"])}
 
     return {"info": info, "date": date, "inputs": inputs, "spark_dates": [x.strftime("%Y-%m-%d") for x in win.index],
             "checks": checks, "milky_checks": milky_checks, "current": current, "history": history,

@@ -14,14 +14,20 @@ Design: a full-screen ocean map with dark glass panels, a timeline with an activ
 
 > Prototype. The app detects **high-biomass blooms**, using satellite chlorophyll as the signal; it cannot measure toxicity. Toxic species (*Dinophysis*, *Alexandrium*, *Pseudo-nitzschia*) are only detected by Hafró/MAST water sampling. Shellfish farms show the typical monthly share of toxic Hafró samples instead. Do not use it for operational decisions.
 
-## Which blooms matter in Iceland
+## Algae in Iceland (background; also the app's "Algae guide")
+| Group | Main genera | Effect | Affects | Seen from space? | Icelandic record |
+|---|---|---|---|---|---|
+| Spring diatoms | *Skeletonema, Chaetoceros, Thalassiosira* | Natural yearly bloom; dense or spiny blooms can irritate gills, and decay lowers oxygen | Salmon farms (rarely) | Yes | Every year; our median peak is early June |
+| Fish-killing flagellates (haptophytes) | *Chrysochromulina, Phaeocystis* | Gill-damaging toxins, foam, low oxygen | Farmed salmon | Partly (chlorophyll, haptophyte share) | Spring 2021 losses **reported** by a MAST vet (species not named); Seyðisfjörður over 20 years ago (**reported** by a local farmer) |
+| Coccolithophores | *Emiliania huxleyi* | Milky water; not toxic | Nothing harmful known | Yes, very clearly | Every summer S/SW; Westfjords Sept 2022 (sampled by Hafró) |
+| *Dinophysis* (dinoflagellate) | *D. acuminata, D. norvegica, D. acuta, D. rotundata* | DSP: diarrhoea | Mussels → people | No | Most common cause of warnings; Hvalfjörður warnings 2016–2019 |
+| *Alexandrium* (dinoflagellate) | *A. tamarense, A. ostenfeldii* | PSP: nerve toxin | Mussels, scallops → people | No | Above the limit most summers (June–Aug); PSP toxin found in mussels (Eyjafjörður, Breiðafjörður) |
+| *Pseudo-nitzschia* (diatom) | *P. seriata, P. delicatissima* | ASP (domoic acid) | Shellfish | No | Cells often above the limit, but **ASP toxin has never been found in Icelandic shellfish** (Hafró) |
+| Cyanobacteria (freshwater) | *Dolichospermum, Aphanizomenon* | Scum, can be toxic | Lakes (Mývatn) | Yes, but not with our marine data | Recurring summer blooms; out of scope |
 
-| Bloom | Harmful? | Seen by satellite? |
-|---|---|---|
-| Spring diatom bloom (Apr–Jun, every year) | Usually not; it is the natural annual bloom | Yes: chlorophyll and the diatom fraction |
-| Coccolithophores, *Emiliania huxleyi* (S/SW offshore every summer; Westfjords Sept 2022) | Not toxic, according to Hafró | Yes: milky water shows as high 555 nm reflectance |
-| Fish-killing blooms near salmon pens (e.g. 2021 losses reported by MAST; Seyðisfjörður) | **Yes** | Partly: chlorophyll spike and the haptophyte fraction |
-| Shellfish-toxin species (DSP/PSP/ASP) | **Yes**, for anyone eating the shellfish | **No**: too few cells to show up; only water sampling detects them |
+From our Hafró parse (917 samples, 7 stations, 2005–2019), the counts of samples above the safe limit were: *Dinophysis* ~124, *Alexandrium* ~110, *Pseudo-nitzschia* ~91. Most were in June–August, a few in April–November. Hafró stopped monitoring Hvalfjörður in June 2019. HAEDAT describes Iceland's record as incomplete, so the true number of events is likely higher.
+
+**What this means for the app:** satellites can follow high-biomass blooms, which matter for sea-pen farms. Toxins, which matter for shellfish farms, need water samples. So shellfish farm cards lead with toxin information: this month's share of Hafró samples above the limit for DSP, PSP and ASP, plus the nearest Hafró station's history. A farm-type filter (All / Sea pens / Shellfish) is available in every mode.
 
 ## What is detected, and how
 | Bloom type | Signal | When it counts as **confirmed** |
