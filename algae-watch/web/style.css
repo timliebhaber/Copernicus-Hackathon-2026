@@ -274,15 +274,16 @@ dialog#guide .lede { color: var(--text-2); margin: 6px 0 16px; font-size: 15px; 
 dialog#guide .close { position: absolute; top: 18px; right: 18px; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, 0.08); color: var(--text-2); }
 .guidekey { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; color: var(--text-2); margin-bottom: 16px; }
 .guidekey span { display: inline-flex; align-items: center; gap: 6px; }
-.algae { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-.alga { padding: 16px 18px; border-radius: 16px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line); border-left: 4px solid var(--c, var(--line-strong)); }
+.algae { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.alga { padding: 14px 16px; border-radius: 16px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line); border-left: 4px solid var(--c, var(--line-strong)); }
 .alga .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .alga h2 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
-.alga .sci { font-size: 12px; color: var(--muted); font-style: italic; margin-top: 2px; }
+.alga .sci { font-size: 11.5px; color: var(--muted); font-style: italic; margin-top: 2px; }
+.alga .ice { margin-top: 10px; font-size: 12px; color: var(--text-2); }
 .alga .toxin { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; padding: 3px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); color: var(--text-2); white-space: nowrap; }
 .alga .toxin.bad { background: rgba(255, 69, 58, 0.15); color: #ff8a80; }
 .alga .toxin.ok { background: rgba(48, 209, 88, 0.14); color: var(--low); }
-.alga p { margin: 8px 0 0; font-size: 13px; color: var(--text-2); }
+.alga p { margin: 8px 0 0; font-size: 13px; color: var(--text); }
 .alga p b { color: var(--text); font-weight: 600; }
 .alga .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--text-2); }
@@ -347,11 +348,12 @@ dialog#how .close { position: absolute; top: 18px; right: 18px; width: 34px; hei
 @media (max-width: 1320px) { .cursor { display: none; } }
 @media (max-width: 1180px) {
   .brand span, .pillbtn span { display: none; }
-  .algae { grid-template-columns: 1fr; }
+  .algae { grid-template-columns: repeat(2, 1fr); }
   .search { width: 210px; }
   .steps { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
+  .algae { grid-template-columns: 1fr; }
   .topleft { left: 12px; right: 12px; top: 12px; }
   .brand, .pillbtn { display: none; }
   .modes { flex: 1; min-width: 0; }

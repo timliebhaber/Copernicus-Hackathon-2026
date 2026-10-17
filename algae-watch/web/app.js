@@ -39,62 +39,32 @@ const ICONS = {
 const AFFECTS = { fish: ["fish", "Salmon farms"], shellfish: ["shell", "Shellfish"], people: ["person", "People (eating shellfish)"], lakes: ["lake", "Lakes"] };
 const SPACE = { yes: "Seen from space", partly: "Partly seen from space", no: "Not visible from space" };
 const ALGAE = [
-  { name: "Spring diatoms", sci: "Skeletonema, Chaetoceros, Thalassiosira", c: "#30d158", toxin: "No toxin", tox: "ok",
-    affects: ["fish"], space: "yes",
-    what: "The big natural bloom every spring. Feeds the whole food web.",
-    harm: "Usually harmless. Very dense blooms and spiny <i>Chaetoceros</i> can irritate salmon gills, and decaying blooms use up oxygen.",
-    iceland: "Every year, peaking around late May to early June (our median: 4 June).",
-    app: "Detected as a bloom; the satellite estimates when diatoms dominate." },
-  { name: "Fish-killing flagellates", sci: "Chrysochromulina, Phaeocystis (haptophytes)", c: "#ff453a", toxin: "Gill damage", tox: "bad",
-    affects: ["fish"], space: "partly",
-    what: "Tiny flagellates that can bloom densely near the coast.",
-    harm: "<i>Chrysochromulina</i> toxins damage gills (Norway 2019: over 8 million salmon died). <i>Phaeocystis</i> makes foam and slime that can lower oxygen.",
-    iceland: "Spring 2021 salmon losses were <b>reported</b> by a MAST vet to be caused by blooms (species not named); a local farmer reported a bloom that killed most fish in Seyðisfjörður over 20 years ago.",
-    app: "A dense bloom shows as chlorophyll, and the satellite estimates a haptophyte share, but it cannot tell harmful species apart." },
-  { name: "Coccolithophores", sci: "Emiliania huxleyi (a haptophyte)", c: "#64d2ff", toxin: "No toxin", tox: "ok",
-    affects: [], space: "yes",
-    what: "Chalk-plated algae that turn the sea milky turquoise.",
-    harm: "Not toxic; Hafró expects no harm to the ecosystem or farms. Looks alarming, so people ask about it.",
-    iceland: "Every summer south and southwest of Iceland; Westfjords fjords in September 2022 (Hafró sampled 4.7–6.3 million cells per litre).",
-    app: "Own detector: very bright green light. Farms pulse blue." },
-  { name: "Dinophysis", sci: "D. acuminata, D. norvegica, D. acuta, D. rotundata", c: "#ff9f0a", toxin: "DSP", tox: "bad",
-    affects: ["shellfish", "people"], space: "no",
-    what: "A dinoflagellate. Mussels filter it and store the toxin.",
-    harm: "Diarrhetic shellfish poisoning: nausea, vomiting, diarrhoea. Harmless to the mussels themselves.",
-    iceland: "The most common cause of shellfish warnings, above all in Hvalfjörður (warnings 2016–2019). Season roughly June to September, sometimes later.",
-    app: "Not visible from space. Shellfish farms show Hafró's monthly record and nearest station." },
-  { name: "Alexandrium", sci: "A. tamarense, A. ostenfeldii", c: "#ff375f", toxin: "PSP", tox: "bad",
-    affects: ["shellfish", "people"], space: "no",
-    what: "A dinoflagellate; even a few hundred cells per litre matter.",
-    harm: "Paralytic shellfish poisoning: a nerve toxin that can paralyse. Affects mussels and scallops as carriers.",
-    iceland: "Above the safe limit most summers, mainly June to August; PSP toxin has been found in mussels (Eyjafjörður, Breiðafjörður).",
-    app: "Not visible from space. Shown for shellfish farms from Hafró's samples." },
-  { name: "Pseudo-nitzschia", sci: "P. seriata, P. delicatissima, P. fraudulenta", c: "#bf5af2", toxin: "ASP", tox: "bad",
-    affects: ["shellfish"], space: "no",
-    what: "A chain-forming diatom common in Icelandic waters.",
-    harm: "Can make domoic acid (amnesic shellfish poisoning, memory loss).",
-    iceland: "Cells often exceed the warning limit, but <b>ASP toxin has never been found in Icelandic shellfish</b> (Hafró).",
-    app: "Not visible from space. Shown for shellfish farms from Hafró's samples." },
-  { name: "Cyanobacteria", sci: "Dolichospermum, Aphanizomenon flos-aquae", c: "#8e8e93", toxin: "Can be toxic", tox: "",
-    affects: ["lakes"], space: "yes",
-    what: "Freshwater 'blue-green algae' forming scum on lakes.",
-    harm: "Blocks light and can be toxic; affects lake plants, midges and birds.",
-    iceland: "Recurring summer blooms in Lake Mývatn, reported to be getting worse.",
-    app: "Outside this app: we use marine data only (Copernicus Land has a lake product)." },
+  { name: "Spring diatoms", sci: "Skeletonema, Chaetoceros", c: "#30d158", toxin: "No toxin", tox: "ok", affects: [], space: "yes",
+    effect: "The natural yearly bloom. Usually harmless.", iceland: "Every spring, peak around early June." },
+  { name: "Fish-killing flagellates", sci: "Chrysochromulina, Phaeocystis", c: "#ff453a", toxin: "Gill damage", tox: "bad", affects: ["fish"], space: "partly",
+    effect: "Damage gills or lower oxygen; can kill farmed salmon.", iceland: "Salmon losses reported in spring 2021." },
+  { name: "Coccolithophores", sci: "Emiliania huxleyi", c: "#64d2ff", toxin: "No toxin", tox: "ok", affects: [], space: "yes",
+    effect: "Turn the sea milky turquoise. Harmless.", iceland: "Every summer; Westfjords, Sept 2022." },
+  { name: "Dinophysis", sci: "D. acuminata, D. norvegica", c: "#ff9f0a", toxin: "DSP", tox: "bad", affects: ["shellfish", "people"], space: "no",
+    effect: "Mussels store the toxin; causes diarrhoea in people.", iceland: "Most common cause of mussel warnings." },
+  { name: "Alexandrium", sci: "A. tamarense, A. ostenfeldii", c: "#ff375f", toxin: "PSP", tox: "bad", affects: ["shellfish", "people"], space: "no",
+    effect: "Nerve toxin in mussels and scallops; can paralyse.", iceland: "Above the limit most summers." },
+  { name: "Pseudo-nitzschia", sci: "P. seriata, P. delicatissima", c: "#bf5af2", toxin: "ASP", tox: "bad", affects: ["shellfish"], space: "no",
+    effect: "Can make domoic acid (memory loss).", iceland: "Common, but the toxin was never found in Icelandic shellfish." },
 ];
 
 function openGuide() {
   const dlg = $("#guide");
-  $("#guideKey").innerHTML = Object.values(AFFECTS).map(([k, t]) => `<span>${icon(k)}${t}</span>`).join("") +
+  $("#guideKey").innerHTML = Object.entries(AFFECTS).filter(([k]) => k !== "lakes").map(([, [k, t]]) => `<span>${icon(k)}${t}</span>`).join("") +
     `<span>${icon("sat")}Seen from space?</span>`;
   $("#guideCards").innerHTML = ALGAE.map((a) => `
     <div class="alga" style="--c:${a.c}">
-      <div class="top"><div><h2>${a.name}</h2><div class="sci">${a.sci}</div></div><span class="toxin ${a.tox}">${a.toxin}</span></div>
-      <p>${a.what} ${a.harm}</p>
-      <p><b>In Iceland:</b> ${a.iceland}</p>
-      <div class="chips">${a.affects.length ? a.affects.map((k) => `<span class="tag aff">${icon(AFFECTS[k][0])}${AFFECTS[k][1]}</span>`).join("") : `<span class="tag">Nothing harmful known</span>`}
-        <span class="tag space-${a.space}">${icon("sat")}${SPACE[a.space]}</span></div>
-      <div class="app"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 3 8-8"/></svg><span>${a.app}</span></div>
+      <div class="top"><h2>${a.name}</h2><span class="toxin ${a.tox}">${a.toxin}</span></div>
+      <div class="sci">${a.sci}</div>
+      <p>${a.effect}</p>
+      <div class="chips">${a.affects.map((k) => `<span class="tag aff" title="${AFFECTS[k][1]}">${icon(AFFECTS[k][0])}${AFFECTS[k][1].split(" (")[0]}</span>`).join("")}
+        <span class="tag space-${a.space}">${icon("sat")}From space: ${{ yes: "yes", partly: "partly", no: "no" }[a.space]}</span></div>
+      <div class="ice">🇮🇸 ${a.iceland}</div>
     </div>`).join("");
   dlg.showModal();
 }
