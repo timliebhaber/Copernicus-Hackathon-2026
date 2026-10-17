@@ -93,7 +93,8 @@ def main():
 
     # 3. Fjord (300 m) vs offshore 4 km chlorophyll at each site, same day
     s = pd.read_parquet(config.PROCESSED / "site_series.parquet")
-    s = s[s.date.dt.month.isin(SEASON)]
+    s = s[s.date.dt.month.isin(SEASON) & s.site.isin([x["name"] for x in config.SITES]) &
+          s.date.dt.year.between(*YEARS)]
     per = {}
     for name, g in s.groupby("site"):
         per[name] = compare(g.set_index("date").chl_obs, g.set_index("date").chl_300m, log=True)

@@ -39,7 +39,7 @@ Current result: confirmed blooms cover 3.8% of Apr–Sep days, about 1.6 per sit
 - **Labels:** 917 Hafró monitoring samples from 7 stations (2005–2019). The scraper parses Hafró's Icelandic text to find which genus was above the shellfish-poisoning threshold.
 - **Inputs:** conditions at the station **7 days before** each sample: sea temperature and its anomaly, salinity, mixed layer, chlorophyll and its anomaly, wind, sunlight, rain, season, and the last known result.
 - **Test:** trained on 2005–2014 and tested on 2015–2019, against seasonal and persistence baselines, with a bootstrap 95% interval.
-- **First result (any genus above threshold):** ROC-AUC 0.76, against 0.72 for the seasonal baseline and 0.65 for persistence. The gain is **not yet statistically significant** (interval −0.03 to +0.12). For *Dinophysis*, the model is worse than the seasonal baseline.
+- **Result with the full data (any genus above threshold, 7 days ahead):** ROC-AUC **0.77**, against 0.72 for the seasonal baseline and 0.65 for persistence. The gain is **not statistically significant** (95% interval −0.02 to +0.14; only 194 test samples). Adding salinity and mixed-layer depth changed little. For *Dinophysis*, the model is significantly **worse** than the seasonal baseline. In short, these conditions add at most a small amount over "it's July at this station".
 
 ## Data (Iceland box: 63–67°N, 25–13°W)
 | Stream | Copernicus dataset ID | Resolution | Years |
