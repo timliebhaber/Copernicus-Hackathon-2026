@@ -57,6 +57,19 @@ def daily_features(s):
     return pd.concat(out, ignore_index=True)
 
 
+MAX_KNOWN_AGE = np.timedelta64(60, "D")
+STATION_ORDER = sorted(st["name"] for st in config.HAFRO_STATIONS)
+
+
+def last_known(dates, labels, t):
+    """Most recent Hafró result on or before t, if it is at most 60 days old."""
+    ok = dates <= t
+    if not ok.any():
+        return np.nan
+    i = np.where(ok)[0][-1]
+    return float(labels[i]) if t - dates[i] <= MAX_KNOWN_AGE else np.nan
+
+
 def build_table(lead):
     tox = pd.read_parquet(config.PROCESSED / "hafro_toxic.parquet")
     s = pd.read_parquet(config.PROCESSED / "site_series.parquet")
@@ -68,18 +81,17 @@ def build_table(lead):
     tox["feature_date"] = tox.date - pd.Timedelta(days=lead)
     rows = tox.merge(feats, left_on=["station", "feature_date"], right_on=["site", "date"],
                      how="left", suffixes=("", "_f")).drop(columns=["date_f", "site"])
-    # last Hafró result known at forecast time (a sample taken >= lead days earlier)
+    # last Hafró result known at forecast time (a sample taken >= lead days earlier, <= 60 days old)
     prev = []
     for st, g in tox.groupby("station"):
         dates, labels = g.date.values, g.any_above.values
         for d in dates:
-            known = labels[dates <= d - np.timedelta64(lead, "D")]
-            prev.append(float(known[-1]) if len(known) else np.nan)
+            prev.append(last_known(dates, labels, d - np.timedelta64(lead, "D")))
     rows["last_known_above"] = prev
     rows["doy_sin"] = np.sin(2 * np.pi * rows.date.dt.dayofyear / 365.25)
     rows["doy_cos"] = np.cos(2 * np.pi * rows.date.dt.dayofyear / 365.25)
     rows["month"] = rows.date.dt.month
-    rows["station_id"] = rows.station.astype("category").cat.codes
+    rows["station_id"] = rows.station.map(STATION_ORDER.index)
     return rows
 
 

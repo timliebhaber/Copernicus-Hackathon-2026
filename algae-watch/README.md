@@ -35,6 +35,23 @@ Current result: confirmed blooms cover 3.8% of Apr–Sep days, about 1.6 per sit
 - **Hafró toxic samples vs satellite blooms:** a satellite bloom appeared near 10% of toxic samples and 9% of clean ones. Toxic algae and chlorophyll blooms are different things, so a separate forecast is needed.
 - **Spring-bloom timing vs literature:** median peak around the end of May across 82 site-years. Gudmundsson (1998) found the bloom usually peaks in May.
 
+## Bloom forecast (`src/train_bloom.py`, `src/predict.py`)
+- **Target:** a *confirmed* high-biomass bloom at the site within the next **3 or 7 days**.
+- **Inputs, only what is known on the forecast day:**
+  - real cloud-free observations (4 km and 300 m)
+  - gap-filled chlorophyll **delayed by 5 days**, because the reprocessed archive can fill a day using later images. Without the delay, PR-AUC was 0.51; with it, 0.46.
+  - sea temperature and its anomaly, salinity, mixed layer, currents, waves, wind, sunlight, rain, season, site
+- **Test:** trained 1998–2015, validated 2016–2018, tested on **2019–2025**. The 95% intervals resample whole site-years.
+
+| Within | Model ROC-AUC / PR-AUC | Persistence (bloom seen last week) | Seasonal | New blooms only (model vs seasonal AUC) |
+|---|---|---|---|---|
+| 3 days | **0.86 / 0.46** | 0.73 / 0.20 | 0.65 / 0.12 | 0.77 vs 0.66 |
+| 7 days | **0.82 / 0.45** | 0.67 / 0.22 | 0.66 / 0.18 | 0.75 vs 0.67 |
+
+All gains are statistically significant. For brand-new blooms, precision is still modest (PR-AUC 0.11–0.17).
+- **Replay:** `predict.py` makes **walk-forward** forecasts. Each year is predicted by a model trained only on earlier years, so the app's Forecast tab shows what the system would really have said on any day from 2005 to 2025, including the top 3 factors behind each forecast. Example: `python src/predict.py --date 2025-05-16`.
+- **Coordinates:** every table in `data/processed/` has `lat`, `lon` and `kind` columns. These are the site or station coordinates (approximate placeholders); values are averaged over the ocean pixels around each point.
+
 ## Toxic-algae forecast (`src/scrape_hafro.py`, `src/train_toxic.py`)
 - **Labels:** 917 Hafró monitoring samples from 7 stations (2005–2019). The scraper parses Hafró's Icelandic text to find which genus was above the shellfish-poisoning threshold.
 - **Inputs:** conditions at the station **7 days before** each sample: sea temperature and its anomaly, salinity, mixed layer, chlorophyll and its anomaly, wind, sunlight, rain, season, and the last known result.

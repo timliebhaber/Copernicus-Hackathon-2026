@@ -59,3 +59,18 @@ def site_mask(ds, site, radius_km=config.SITE_RADIUS_KM, fallback_km=30):
         m = np.zeros_like(ocean)
         m.flat[near] = d.flat[near] <= fallback_km
     return m
+
+
+def add_coords(df, site_col="site"):
+    """Insert lat, lon and kind of each point (from config.POINTS) right after the site column.
+
+    These are the site / station coordinates (approximate placeholders); values are averages of
+    the ocean pixels around that point (see site_mask).
+    """
+    pts = {p["name"]: p for p in config.POINTS}
+    df = df.drop(columns=[c for c in ("lat", "lon", "kind") if c in df.columns])
+    i = df.columns.get_loc(site_col) + 1
+    df.insert(i, "lat", df[site_col].map(lambda s: pts.get(s, {}).get("lat")))
+    df.insert(i + 1, "lon", df[site_col].map(lambda s: pts.get(s, {}).get("lon")))
+    df.insert(i + 2, "kind", df[site_col].map(lambda s: pts.get(s, {}).get("kind")))
+    return df

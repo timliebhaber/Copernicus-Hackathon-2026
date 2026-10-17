@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   manifest: null, sites: [], dates: [], idx: 0, layer: "chl",
   site: null, series: null, charts: [], playing: null, snapshot: {}, window: "season", windowRange: [0, 0],
-  tab: "data", events: [], phenology: [], calendar: null,
+  tab: "data", events: [], phenology: [], calendar: null, horizon: 3, fc: {}, fcSeries: null, metrics: null,
 };
 
 // ---------- map ----------
@@ -39,7 +39,8 @@ function fmtDate(s) {
 // ---------- layers ----------
 function buildLayerSelect() {
   const sel = $("layerSelect");
-  const order = state.tab === "blooms" ? ["bloom", "anomaly", "chl"] : ["chl", "chl_obs", "sst", "rrs555"];
+  const order = { blooms: ["bloom", "anomaly", "chl"], forecast: ["anomaly", "bloom", "chl", "sst"],
+                  model: ["bloom", "anomaly", "chl"] }[state.tab] || ["chl", "chl_obs", "sst", "rrs555"];
   if (!order.includes(state.layer)) state.layer = order[0];
   sel.innerHTML = order.filter((k) => state.manifest.layers[k])
     .map((k) => `<option value="${k}">${state.manifest.layers[k].label}</option>`).join("");
@@ -141,9 +142,21 @@ function refreshMarkers() {
   for (const s of state.sites) {
     const m = markers[s.name];
     if (!m) continue;
-    if (s.kind === "hafro") {  // Hafró stations only on the Blooms tab
-      if (state.tab === "blooms" && !map.hasLayer(m)) m.addTo(map);
-      if (state.tab !== "blooms" && map.hasLayer(m)) map.removeLayer(m);
+    if (s.kind === "hafro") {  // Hafró stations on the Blooms and Forecast tabs
+      const show = state.tab === "blooms" || state.tab === "forecast";
+      if (show && !map.hasLayer(m)) m.addTo(map);
+      if (!show && map.hasLayer(m)) map.removeLayer(m);
+    }
+    if (state.tab === "forecast") {
+      const f = state.fc[s.name];
+      const r0 = s.kind === "hafro" ? 6 : 8;
+      if (!f) { m.setStyle({ fillColor: css("--axis"), radius: r0 }); m.setTooltipContent(s.name); continue; }
+      const risk = f[`risk_${state.horizon}d`];
+      const lv = f[`level_${state.horizon}d`];
+      const tox = s.kind === "hafro" && f.toxic_risk_7d != null ? ` · toxic ${Math.round(f.toxic_risk_7d * 100)}%` : "";
+      m.setStyle({ fillColor: css(`--lvl-${lv}`), radius: r0 + (lv === "high" ? 4 : lv === "medium" ? 2 : 0) });
+      m.setTooltipContent(`${s.name} · ${Math.round(risk * 100)}%${tox}`);
+      continue;
     }
     const v = state.snapshot[s.name] || {};
     const bloom = state.tab === "blooms" && v.is_bloom;
@@ -175,11 +188,18 @@ async function openSite(s) {
     fetch(`/api/phenology?site=${q}`).then((r) => r.json()),
     s.kind === "hafro" ? fetch(`/api/toxic?station=${q}`).then((r) => r.json()) : Promise.resolve([]),
   ]);
+  state.fcSeries = await fetch(`/api/forecast_series?site=${q}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   renderPanel();
 }
 
 function renderPanel() {
-  if (!state.site) { renderOverview(); return; }
+  if (!state.site) {
+    if (state.tab === "forecast") renderForecastList();
+    else if (state.tab === "model") renderModelInfo();
+    else renderOverview();
+    return;
+  }
+  if (state.tab === "forecast" || state.tab === "model") { renderForecastSite(); return; }
   renderCharts();
   renderStats();
   if (state.tab === "blooms") { renderSiteCalendar(); renderEvents(); renderPhenology(); renderToxic(); }
@@ -192,7 +212,7 @@ document.querySelectorAll("[data-window]").forEach((b) => b.onclick = () => {
 });
 
 $("closePanel").onclick = () => {
-  state.site = null; $("panelEmpty").hidden = false; $("panelSite").hidden = true; renderOverview();
+  state.site = null; $("panelEmpty").hidden = false; $("panelSite").hidden = true; renderPanel();
 };
 
 function renderStats() {
@@ -373,19 +393,22 @@ async function setIdx(i) {
     if (c < lo + 15 || c > hi - 15) renderCharts(); else state.charts.forEach((ch) => ch.draw());
   } else state.charts.forEach((c) => c.draw());
   await loadSnapshot();
-  renderStats();
+  if (state.tab === "forecast" || state.tab === "model") { await loadForecast(); renderPanel(); }
+  else renderStats();
 }
 
 // ---------- tabs ----------
 function setTab(tab, keepLayer = false) {
   state.tab = tab;
-  if (!keepLayer) state.layer = tab === "blooms" ? "bloom" : "chl";
+  if (!keepLayer) state.layer = { blooms: "bloom", forecast: "anomaly", model: "bloom" }[tab] || "chl";
+  document.body.dataset.tab = tab;
   document.querySelectorAll(".tab[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   buildLayerSelect();
   renderLegend();
   updateMap();
   $("panel").dataset.tab = tab;
-  if (state.site) renderPanel(); else renderOverview();
+  if (tab === "forecast" || tab === "model") loadForecast().then(() => { refreshMarkers(); renderPanel(); });
+  else renderPanel();
   const u = new URL(location); u.searchParams.set("tab", tab); history.replaceState(null, "", u);
 }
 document.querySelectorAll(".tab[data-tab]").forEach((b) => b.onclick = () => setTab(b.dataset.tab));
@@ -533,7 +556,7 @@ function initTime() {
   // deep links: ?date=2024-05-15&layer=chl&site=Seyðisfjörður
   const q = new URLSearchParams(location.search);
   if (q.get("view")) { const [la, lo, z] = q.get("view").split(",").map(Number); map.setView([la, lo], z); }
-  if (q.get("tab") === "blooms") state.tab = "blooms";
+  if (["blooms", "forecast", "model"].includes(q.get("tab"))) state.tab = q.get("tab");
   const urlLayer = q.get("layer") && state.manifest.layers[q.get("layer")];
   if (urlLayer) state.layer = q.get("layer");
   initTime();
@@ -545,3 +568,165 @@ function initTime() {
   const site = state.sites.find((s) => s.name === q.get("site"));
   if (site) openSite(site);
 })();
+
+
+// ---------- forecast & model (Step 4-5) ----------
+const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
+const lvlBadge = (lv) => `<span class="lvl ${lv}">${lv}</span>`;
+
+async function loadForecast() {
+  try {
+    const r = await fetch(`/api/forecast?date=${currentDate()}`);
+    const j = r.ok ? await r.json() : { sites: [] };
+    state.fc = Object.fromEntries(j.sites.map((x) => [x.site, x]));
+  } catch { state.fc = {}; }
+  refreshMarkers();
+}
+
+document.querySelectorAll("[data-h]").forEach((b) => b.onclick = () => {
+  state.horizon = +b.dataset.h;
+  document.querySelectorAll("[data-h]").forEach((x) => x.classList.toggle("on", x === b));
+  refreshMarkers(); renderPanel();
+});
+
+function renderForecastList() {
+  const rows = Object.values(state.fc);
+  const h = state.horizon;
+  if (!rows.length) {
+    const m = +currentDate().slice(5, 7);
+    $("forecastList").innerHTML = `<div class="verdict">${m >= 11 || m <= 2 ? "No forecast in winter: satellites can't see the sea during the polar night (Nov–Feb)." : "No forecast for this date."}</div>`;
+    return;
+  }
+  rows.sort((a, b) => b[`risk_${h}d`] - a[`risk_${h}d`]);
+  const farms = rows.filter((r) => r.kind !== "hafro"), stations = rows.filter((r) => r.kind === "hafro");
+  const tr = (r) => `<tr data-site="${r.site}"><td>${r.site}</td><td>${pct(r[`risk_${h}d`])}</td><td>${lvlBadge(r[`level_${h}d`])}</td>
+    <td>${r.kind === "hafro" ? pct(r.toxic_risk_7d) : ""}</td></tr>`;
+  $("forecastList").innerHTML = `
+    <h3>Bloom risk, next ${h} days · issued ${fmtDate(currentDate())}</h3>
+    <div class="sub">Chance of a confirmed high-biomass bloom. Levels: low &lt; ${config.low * 100}%, medium ${config.low * 100}–${config.high * 100}%, high &gt; ${config.high * 100}%. Model trained up to ${rows[0].model_trained_until}.</div>
+    <table class="risklist"><thead><tr><th>Farm site</th><th>Risk</th><th>Level</th><th></th></tr></thead><tbody>${farms.map(tr).join("")}</tbody></table>
+    <h3>Hafró stations</h3>
+    <div class="sub">Bloom risk, plus toxic-algae risk in 7 days (experimental: not proven better than season alone).</div>
+    <table class="risklist"><thead><tr><th>Station</th><th>Bloom</th><th>Level</th><th>Toxic 7d</th></tr></thead><tbody>${stations.map(tr).join("")}</tbody></table>`;
+  $("forecastList").querySelectorAll("[data-site]").forEach((t) => t.onclick = () => openSite(state.sites.find((x) => x.name === t.dataset.site)));
+}
+const config = { low: 0.3, high: 0.6 };
+
+let fcChart = null, toxChart = null;
+function renderForecastSite() {
+  const s = state.site, f = state.fc[s.name], h = state.horizon;
+  const box = $("forecastSite");
+  if (state.tab === "forecast") {
+    $("stats").innerHTML = f ? `
+      <div class="stat"><div class="k">Bloom within 3 days</div><div class="v">${pct(f.risk_3d)}</div><div class="u">${lvlBadge(f.level_3d)}</div></div>
+      <div class="stat"><div class="k">Bloom within 7 days</div><div class="v">${pct(f.risk_7d)}</div><div class="u">${lvlBadge(f.level_7d)}</div></div>
+      <div class="stat"><div class="k">Toxic algae in 7 days</div><div class="v">${s.kind === "hafro" ? pct(f.toxic_risk_7d) : "–"}</div><div class="u">${s.kind === "hafro" ? "experimental" : "Hafró stations only"}</div></div>`
+      : `<div class="stat" style="grid-column:1/-1"><div class="k">No forecast for ${fmtDate(currentDate())}</div><div class="u">Forecasts cover Mar–Oct, 2005–2025.</div></div>`;
+  } else $("stats").innerHTML = "";
+  const factors = f ? f[`factors_${h}d`] : [];
+  const outcome = f && f[`bloom_in_${h}d`] != null
+    ? `What actually happened (known only afterwards): ${f[`bloom_in_${h}d`] ? "<b>a bloom occurred</b>" : "no bloom"} within ${h} days.` : "";
+  const isModel = state.tab === "model";
+  box.innerHTML = (isModel ? `<h3>Forecast vs reality at this site</h3><div class="sub">7-day bloom risk issued each day (out of sample) against actual confirmed bloom days (red bands). Test years 2019–2025 were never used for training the scored model.</div>`
+    : `<h3>Why this risk (${h} days)</h3><div class="sub">Factors pushing the risk up most, from the model's feature contributions.</div>
+       <ul class="factors">${factors.length ? factors.map((x) => `<li>${x.feature}</li>`).join("") : "<li>nothing stands out: risk is close to the normal level</li>"}</ul>
+       <div class="outcome">${outcome}</div>
+       <h3>Risk over time</h3><div class="sub">Forecast issued each day (out of sample) vs actual confirmed bloom days (red bands).</div>`) +
+    `<div class="lgd" style="display:flex;gap:10px;font-size:11px;color:var(--text-2)"><span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--series-1);margin-right:4px"></i>3-day risk</span><span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--series-2);margin-right:4px"></i>7-day risk</span></div>
+     <div class="canvas" style="position:relative;height:170px"><canvas id="fcCanvas"></canvas></div>
+     ${s.kind === "hafro" ? `<h3>Toxic-algae risk (7 days ahead)</h3><div class="sub">Experimental. Grey dots: Hafró samples above threshold.</div><div class="canvas" style="position:relative;height:130px"><canvas id="toxCanvas"></canvas></div>` : ""}`;
+  drawForecastChart(isModel);
+}
+
+function drawForecastChart(isModel) {
+  if (fcChart) fcChart.destroy();
+  if (toxChart) { toxChart.destroy(); toxChart = null; }
+  const S = state.fcSeries;
+  if (!S || !S.date.length) return;
+  let lo, hi;
+  if (isModel) { lo = S.date.findIndex((d) => d >= "2019-01-01"); hi = S.date.length; if (lo < 0) lo = 0; }
+  else {
+    const c = S.date.findIndex((d) => d >= currentDate());
+    const ci = c < 0 ? S.date.length - 1 : c;
+    lo = Math.max(0, ci - 120); hi = Math.min(S.date.length, ci + 60);
+  }
+  const labels = S.date.slice(lo, hi);
+  const opts = (ymax) => ({
+    animation: false, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+    plugins: { legend: { display: false }, bloomBands: { flags: S.is_bloom_today.slice(lo, hi) },
+      tooltip: { backgroundColor: css("--surface"), titleColor: css("--text"), bodyColor: css("--text-2"), borderColor: css("--axis"), borderWidth: 1,
+        callbacks: { title: (it) => fmtDate(it[0].label), label: (it) => `${it.dataset.label}: ${pct(it.raw)}` } } },
+    scales: {
+      x: { grid: { display: false }, border: { color: css("--axis") }, ticks: { color: css("--muted"), font: { size: 10 }, maxRotation: 0, autoSkip: false,
+        callback(v) { const d = labels[v]; if (!d) return null; const yearStart = d.slice(5) === "03-01";
+          if (isModel) return yearStart ? d.slice(0, 4) : null;
+          return d.endsWith("-01") ? new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" }) : null; } } },
+      y: { min: 0, max: ymax, grid: { color: css("--grid") }, border: { display: false }, ticks: { color: css("--muted"), font: { size: 10 }, maxTicksLimit: 4, callback: (v) => pct(v) } },
+    },
+  });
+  fcChart = new Chart($("fcCanvas"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "3-day risk", data: S.risk_3d.slice(lo, hi), borderColor: css("--series-1"), borderWidth: isModel ? 1 : 2, pointRadius: 0, tension: 0, spanGaps: false },
+      { label: "7-day risk", data: S.risk_7d.slice(lo, hi), borderColor: css("--series-2"), borderWidth: isModel ? 1 : 2, pointRadius: 0, tension: 0, spanGaps: false },
+    ]},
+    plugins: [bloomBands, dateLine],
+    options: opts(1),
+  });
+  if (state.site.kind === "hafro" && $("toxCanvas")) {
+    const hits = {};
+    (state.toxic || []).forEach((t) => { if (t.any_above) hits[t.date] = 1; });
+    toxChart = new Chart($("toxCanvas"), {
+      type: "line",
+      data: { labels, datasets: [
+        { label: "Toxic risk", data: S.toxic_risk_7d.slice(lo, hi), borderColor: css("--series-3"), borderWidth: 2, pointRadius: 0, tension: 0 },
+        { label: "Hafró: above threshold", data: labels.map((d) => (hits[d] ? 0.97 : null)), showLine: false, pointRadius: 3, borderColor: css("--muted"), backgroundColor: css("--muted") },
+      ]},
+      plugins: [dateLine],
+      options: { ...opts(1), plugins: { ...opts(1).plugins, bloomBands: {} } },
+    });
+  }
+}
+
+async function renderModelInfo() {
+  if (!state.metrics) state.metrics = await (await fetch("/api/metrics")).json();
+  const M = state.metrics;
+  const f3 = (x) => (x == null ? "–" : x.toFixed(2));
+  const ci = (c) => `[${c[0] >= 0 ? "+" : ""}${c[0].toFixed(2)}, ${c[1] >= 0 ? "+" : ""}${c[1].toFixed(2)}]`;
+  const sig = (c) => (c[0] > 0 ? "<b>significantly better</b>" : c[1] < 0 ? "<b>significantly worse</b>" : "not significantly different");
+  const table = (r, rows) => `<table class="mtable"><thead><tr><th>Method</th><th>ROC-AUC</th><th>PR-AUC</th><th>Precision</th><th>Recall</th></tr></thead><tbody>
+    ${rows.map(([k, name]) => r[k] ? `<tr class="${k === "model" || k === "lightgbm" ? "best" : ""}"><td>${name}</td><td>${f3(r[k].roc_auc)}</td><td>${f3(r[k].pr_auc)}</td><td>${f3(r[k].precision)}</td><td>${f3(r[k].recall)}</td></tr>` : "").join("")}</tbody></table>`;
+  let html = `<h3>How good are the forecasts?</h3><div class="sub">All scores are on years the model never saw during training. ROC-AUC: 0.5 = coin flip, 1 = perfect. PR-AUC: compare with the share of positives (what random guessing would score).</div>`;
+  if (M.bloom) {
+    for (const [k, r] of Object.entries(M.bloom)) {
+      html += `<h3>Bloom within ${r.horizon_days} days</h3><div class="sub">Test ${r.test_years}, ${r.n_test.toLocaleString("en")} site-days, ${pct(r.positive_rate_test)} with a bloom.</div>
+        ${table(r, [["model", "Model (LightGBM)"], ["baseline_persistence", "Persistence: bloom seen last week"], ["baseline_seasonal", "Seasonal: usual rate for site & month"]])}
+        <div class="verdict">vs persistence: ${sig(r.auc_gain_vs_persistence_ci95)} (AUC gain ${ci(r.auc_gain_vs_persistence_ci95)}); vs seasonal: ${sig(r.auc_gain_vs_seasonal_ci95)} ${ci(r.auc_gain_vs_seasonal_ci95)}.<br>
+        <b>New blooms only</b> (none seen the week before, ${pct(r.onset.positive_rate)} positive): AUC ${f3(r.onset.model.roc_auc)} vs seasonal ${f3(r.onset.baseline_seasonal.roc_auc)}, PR-AUC ${f3(r.onset.model.pr_auc)}, ${sig(r.onset.auc_gain_vs_seasonal_ci95)}.</div>`;
+    }
+    const imp = Object.entries(M.bloom["7d"].importance).slice(0, 8);
+    const mx = imp[0][1];
+    html += `<h3>What drives the 7-day bloom forecast</h3><div class="sub">Share of the model's total gain.</div>` +
+      imp.map(([k, v]) => `<div class="barrow"><span class="lab" title="${k}">${k}</span><div class="bar" style="width:${(v / mx) * 100}%"></div><span class="num">${pct(v)}</span></div>`).join("");
+  }
+  if (M.toxic) {
+    html += `<h3>Toxic algae in 7 days (Hafró stations)</h3><div class="sub">Trained on 2005–2014 Hafró samples, tested on 2015–2019 (194 samples).</div>`;
+    const names = { any_above: "Any toxic genus", alexandrium_above: "Alexandrium (PSP)", dinophysis_above: "Dinophysis (DSP)", pseudo_nitzschia_above: "Pseudo-nitzschia (ASP)" };
+    html += `<table class="mtable"><thead><tr><th>Target</th><th>Model AUC</th><th>Seasonal AUC</th><th>Verdict</th></tr></thead><tbody>` +
+      M.toxic.map((r) => `<tr><td>${names[r.target]}</td><td>${f3(r.lightgbm.roc_auc)}</td><td>${f3(r.baseline_seasonal.roc_auc)}</td><td>${r.auc_gain_vs_best_baseline.ci95[0] > 0 ? "better" : r.auc_gain_vs_best_baseline.ci95[1] < 0 ? "worse" : "not proven"}</td></tr>`).join("") +
+      `</tbody></table><div class="verdict">Conditions add at most a little over "it's July at this station". The toxic forecast is shown as <b>experimental</b>.</div>`;
+  }
+  const V = M.validation;
+  if (V) {
+    html += `<h3>Detector checked against independent evidence</h3><ul class="plainlist">` +
+      V.documented_events.map((e) => `<li>${e.result.startsWith("DETECTED") ? "✅" : "⚠️"} ${e.event}: ${e.result}${e.first_detection ? " from " + e.first_detection : ""}</li>`).join("") +
+      (V.hafro_toxic_vs_satellite ? `<li>ℹ️ Satellite blooms near toxic Hafró samples: ${pct(V.hafro_toxic_vs_satellite.share_toxic_samples_with_satellite_bloom)} vs ${pct(V.hafro_toxic_vs_satellite.share_clean_samples_with_satellite_bloom)} near clean ones, so toxic algae are invisible to chlorophyll.</li>` : "") +
+      (V.phenology_vs_literature ? `<li>ℹ️ Spring bloom peak (median ${V.phenology_vs_literature.median_peak}) vs literature: peak usually in May.</li>` : "") + `</ul>`;
+  }
+  html += `<h3>Honest caveats</h3><ul class="plainlist">
+    <li>• Chlorophyll from space is ±40% and blind under cloud (about half the days) and in the polar night.</li>
+    <li>• A "bloom" here means high biomass; it says nothing about toxicity.</li>
+    <li>• Gap-filled chlorophyll is used with a 5-day delay, because the archive may fill a day using later images.</li>
+    <li>• Site points are approximate placeholders, not licensed farm positions.</li></ul>`;
+  $("modelInfo").innerHTML = html;
+}

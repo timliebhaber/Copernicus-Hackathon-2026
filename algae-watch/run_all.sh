@@ -14,6 +14,10 @@ $PY src/build_site_series.py
 $PY src/detect_blooms.py
 $PY src/scrape_hafro.py          # Hafró toxic-algae samples 2005-2019 (labels)
 $PY src/validate.py              # documented events, Hafró vs satellite, bloom timing vs literature
-[ "$ALGAE_PROFILE" = full ] && $PY src/train_toxic.py --lead 7   # needs 2005-2019 data
+if [ "$ALGAE_PROFILE" = full ]; then
+  $PY src/train_toxic.py --lead 7   # toxic-algae forecast, needs 2005-2019 data
+  $PY src/train_bloom.py            # 3/7-day bloom forecast + metrics vs baselines
+  $PY src/predict.py                # walk-forward daily forecasts for replay in the app
+fi
 $PY src/make_tiles.py
 echo "== done. Start the app with:  ALGAE_PROFILE=$ALGAE_PROFILE .venv/bin/uvicorn api.main:app"

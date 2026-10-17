@@ -16,8 +16,8 @@
     <nav class="tabs" aria-label="Sections">
       <button class="tab active" data-tab="data">Data</button>
       <button class="tab" data-tab="blooms">Blooms</button>
-      <button class="tab" disabled title="Step 4">Model</button>
-      <button class="tab" disabled title="Step 5">Forecast</button>
+      <button class="tab" data-tab="forecast">Forecast</button>
+      <button class="tab" data-tab="model">Model</button>
     </nav>
   </header>
 
@@ -29,6 +29,9 @@
         <label for="layerSelect" class="label">Map layer</label>
         <select id="layerSelect"></select>
         <label class="check"><input type="checkbox" id="fjordToggle" checked> Fjord detail (300 m)</label>
+        <div class="seg only-forecast-card" role="group" aria-label="Forecast horizon" id="horizonSeg">
+          <button class="on" data-h="3">Next 3 days</button><button data-h="7">Next 7 days</button>
+        </div>
         <div id="legend" class="legend"></div>
         <div id="layerNote" class="note"></div>
       </div>
@@ -44,19 +47,27 @@
 
     <aside class="panel" id="panel" data-tab="data">
       <div id="panelEmpty" class="empty">
-        <h2>Pick a site</h2>
+        <h2 class="only-data only-blooms only-forecast">Pick a site</h2>
+        <p class="only-forecast">Bloom-risk forecast issued on the selected date. Each year's forecasts come from a model trained only on <b>earlier</b> years, so replaying a past date shows what the system would really have said. Click a site for details.</p>
         <p class="only-data">Click a fjord marker on the map to see its daily chlorophyll, algae groups, sea temperature and weather.</p>
         <div class="only-blooms">
           <p>Click a fjord marker to see its bloom history. A <b>bloom</b> is when chlorophyll is at least <b>2.5× the normal</b> level for that place and time of year (median <span class="baselineYears">of all years</span>) <b>and</b> at least 3 mg/m³, on ≥10% of the sea within 10 km.</p>
           <p class="small muted">Markers turn red with “· bloom” on days a bloom is detected. Each event is labelled with algae type (from the satellite algae-group product, 2016+) and confidence (high = seen by a real cloud-free observation; low = murky water such as Hvalfjörður).</p>
         </div>
-        <div class="kindkey">
+        <div class="kindkey only-forecast">
+          <span><i class="dot lvl-low"></i> Low bloom risk (&lt; 30%)</span>
+          <span><i class="dot lvl-medium"></i> Medium (30–60%)</span>
+          <span><i class="dot lvl-high"></i> High (&gt; 60%) · bigger marker</span>
+        </div>
+        <div class="kindkey only-data only-blooms only-model">
           <span><i class="dot salmon"></i> Salmon farming fjord</span>
           <span><i class="dot shellfish"></i> Shellfish area (toxin monitoring)</span>
           <span class="only-blooms"><i class="dot hafro"></i> Hafró toxic-algae station (2005–2019 samples)</span>
         </div>
         <p class="muted small">Site markers are <b>approximate placeholders</b> (mid-fjord points), not licensed farm coordinates.</p>
         <div id="overview" class="only-blooms"></div>
+        <div id="forecastList" class="only-forecast"></div>
+        <div id="modelInfo" class="only-model"></div>
       </div>
       <div id="panelSite" hidden>
         <div class="panelhead">
@@ -67,13 +78,14 @@
           <button class="btn" id="closePanel" aria-label="Close">✕</button>
         </div>
         <div class="stats" id="stats"></div>
+        <div id="forecastSite" class="only-forecast only-model"></div>
         <div id="toxicInfo" class="only-blooms block"></div>
         <div id="eventList" class="only-blooms block"></div>
-        <div class="seg" role="group" aria-label="Chart window">
+        <div class="seg only-data only-blooms" role="group" aria-label="Chart window">
           <button class="on" data-window="season">6 months around date</button>
           <button data-window="all">All of 2023–2024</button>
         </div>
-        <div id="charts"></div>
+        <div id="charts" class="only-data only-blooms"></div>
         <div class="only-blooms">
           <div id="siteCalendar" class="block"></div>
           <div class="block">

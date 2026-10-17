@@ -118,6 +118,7 @@ def main():
 
     config.PROCESSED.mkdir(parents=True, exist_ok=True)
     p = config.PROCESSED / "site_series.parquet"
+    out = common.add_coords(out)
     out.to_parquet(p, index=False)
     print(f"saved {p} rows={len(out)} cols={len(out.columns)}")
 

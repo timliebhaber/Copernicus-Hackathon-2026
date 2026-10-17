@@ -267,10 +267,10 @@ def main():
 
     keep = ["date", "site", "chl", "chl_clim", "chl_threshold", "chl_anomaly_ratio", "bloom_fraction", "valid_fraction",
             "candidate_bloom", "is_bloom", "observed_bloom", "cocco_day", "is_cocco"]
-    df[keep].to_parquet(config.PROCESSED / "blooms.parquet", index=False)
-    ev.to_parquet(config.PROCESSED / "bloom_events.parquet", index=False)
+    common.add_coords(df[keep]).to_parquet(config.PROCESSED / "blooms.parquet", index=False)
+    common.add_coords(ev).to_parquet(config.PROCESSED / "bloom_events.parquet", index=False)
     ph = fit_phenology(df)
-    ph.to_parquet(config.PROCESSED / "phenology.parquet", index=False)
+    common.add_coords(ph).to_parquet(config.PROCESSED / "phenology.parquet", index=False)
 
     # ---- report ----
     print(f"\ncandidate bloom site-days: {int(df.candidate_bloom.sum())}, in confirmed events: "

@@ -148,6 +148,48 @@ def calendar():
             "by_month": records(by_month.rename(columns={"date": "month"}))}
 
 
+@lru_cache
+def forecast():
+    f = config.PROCESSED / "forecast.parquet"
+    return pd.read_parquet(f) if f.exists() else pd.DataFrame()
+
+
+@app.get("/api/forecast")
+def forecast_day(date: str):
+    """Forecast issued on `date` for every site: bloom risk 3/7 days, level, top factors, toxic risk."""
+    f = forecast()
+    if f.empty:
+        raise HTTPException(503, "Run src/predict.py first")
+    d = f[f.date == pd.Timestamp(date)].copy()
+    for h in config.HORIZONS:
+        d[f"factors_{h}d"] = d[f"factors_{h}d"].map(json.loads)
+    return {"date": date, "thresholds": {"low": config.RISK_LOW, "high": config.RISK_HIGH}, "sites": records(d)}
+
+
+@app.get("/api/forecast_series")
+def forecast_series(site: str, start: str | None = None, end: str | None = None):
+    """Daily forecast history for one site (risk vs what actually happened)."""
+    f = forecast()
+    d = f[f.site == site]
+    if start:
+        d = d[d.date >= start]
+    if end:
+        d = d[d.date <= end]
+    cols = ["date", "risk_3d", "risk_7d", "bloom_in_3d", "bloom_in_7d", "is_bloom_today", "toxic_risk_7d"]
+    return clean(d[[c for c in cols if c in d.columns]].sort_values("date"))
+
+
+@app.get("/api/metrics")
+def metrics():
+    """Model scores vs baselines (test years) + validation results."""
+    out = {}
+    for name, f in [("bloom", config.DATA / "models" / "bloom_metrics.json"),
+                    ("toxic", config.DATA / "models" / "toxic_metrics.json"),
+                    ("validation", config.PROCESSED / "validation.json")]:
+        out[name] = json.loads(f.read_text()) if f.exists() else None
+    return out
+
+
 @app.get("/api/snapshot")
 def snapshot(date: str):
     """All sites' values on one date (for marker tooltips)."""

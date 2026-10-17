@@ -18,6 +18,9 @@
   --cocco-wash: rgba(42, 120, 214, 0.16);
   --good: #0ca30c;
   --warning: #fab219;
+  --lvl-low: #0ca30c;
+  --lvl-medium: #fab219;
+  --lvl-high: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -161,7 +164,11 @@ select, input[type=date] {
 }
 
 /* ---- blooms tab ---- */
-#panel[data-tab="data"] .only-blooms, #panel[data-tab="blooms"] .only-data { display: none; }
+#panel .only-data, #panel .only-blooms, #panel .only-forecast, #panel .only-model { display: none; }
+#panel[data-tab="data"] .only-data, #panel[data-tab="blooms"] .only-blooms,
+#panel[data-tab="forecast"] .only-forecast, #panel[data-tab="model"] .only-model { display: revert; }
+#horizonSeg { display: none; }
+body[data-tab="forecast"] #horizonSeg { display: inline-flex; }
 .stat .v.crit { color: var(--critical); }
 .block { margin-bottom: 16px; }
 .block h3, #overview h3 { font-size: 13px; margin: 0 0 2px; font-weight: 600; }
@@ -187,3 +194,33 @@ table.events tbody tr:hover { background: var(--page); }
 .conf.low::before { content: "! "; color: var(--critical); }
 .nowrap { white-space: nowrap; }
 #panel[data-tab="blooms"] .kindkey .only-blooms { display: inline; }
+
+/* ---- forecast / model ---- */
+.lvl { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); white-space: nowrap; }
+.lvl::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.lvl.low { color: var(--good); }
+.lvl.medium { color: #b7860b; }
+.lvl.high { color: var(--critical); }
+.risklist { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.risklist td, .risklist th { padding: 6px 4px; border-bottom: 1px solid var(--border); text-align: left; }
+.risklist th { font-weight: 500; color: var(--text-2); font-size: 12px; }
+.risklist tbody tr { cursor: pointer; }
+.risklist tbody tr:hover { background: var(--page); }
+.bar { height: 8px; border-radius: 4px; background: var(--series-1); }
+.barrow { display: grid; grid-template-columns: 170px 1fr 38px; gap: 6px; align-items: center; font-size: 12px; margin: 3px 0; }
+.barrow .lab { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barrow .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); }
+.mtable { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; margin: 4px 0 6px; }
+.mtable th, .mtable td { padding: 4px; border-bottom: 1px solid var(--border); text-align: right; }
+.mtable th:first-child, .mtable td:first-child { text-align: left; }
+.mtable th { font-weight: 500; color: var(--text-2); }
+.mtable tr.best td { font-weight: 600; }
+.verdict { font-size: 12px; padding: 6px 8px; border-radius: 8px; background: var(--page); border: 1px solid var(--border); margin: 4px 0 10px; }
+.factors { margin: 4px 0 10px; padding-left: 0; list-style: none; font-size: 13px; }
+.factors li::before { content: "↑ "; color: var(--critical); font-weight: 700; }
+.outcome { font-size: 12px; color: var(--text-2); margin-bottom: 10px; }
+#modelInfo h3, #forecastSite h3, #forecastList h3 { font-size: 13px; margin: 14px 0 2px; font-weight: 600; }
+#modelInfo .sub, #forecastSite .sub, #forecastList .sub { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.plainlist { list-style: none; padding-left: 0; margin: 4px 0 10px; font-size: 12px; }
+.plainlist li { margin: 4px 0; }
+.dot.lvl-low { background: var(--lvl-low); } .dot.lvl-medium { background: var(--lvl-medium); } .dot.lvl-high { background: var(--lvl-high); }
