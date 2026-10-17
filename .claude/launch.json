@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "algae-watch-sample",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/timliebhaber/Desktop/Code/AI/Copernicus-Hackathon-2026/algae-watch && ALGAE_PROFILE=sample exec ./.venv/bin/uvicorn api.main:app --port ${PORT:-8000}"],
+      "port": 8000
+    }
+  ]
+}
