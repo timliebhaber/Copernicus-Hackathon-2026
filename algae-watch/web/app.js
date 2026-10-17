@@ -17,6 +17,9 @@ L.tileLayer(esri(dark ? "World_Dark_Gray_Base" : "World_Light_Gray_Base"), {
 }).addTo(map);
 L.tileLayer(esri(dark ? "World_Dark_Gray_Reference" : "World_Light_Gray_Reference"), { maxZoom: 16, pane: "shadowPane" }).addTo(map);
 
+map.createPane("farms").style.zIndex = 450;  // above the data overlays ...
+map.createPane("sites").style.zIndex = 460;  // ... and below the analysis-point markers
+
 let regionOverlay = null;
 const fjordOverlays = {};
 const markers = {};
@@ -116,7 +119,7 @@ function drawSites() {
   for (const s of state.sites) {
     const color = kindColor(s.kind);
     const m = L.circleMarker([s.lat, s.lon], {
-      radius: s.kind === "hafro" ? 6 : 8, color: css("--marker-ring"), weight: 2, fillColor: color, fillOpacity: 1,
+      radius: s.kind === "hafro" ? 6 : 8, color: css("--marker-ring"), weight: 2, fillColor: color, fillOpacity: 1, pane: "sites",
     });
     if (s.kind !== "hafro") m.addTo(map);
     const dir = LABEL_DIR[s.name] || "right";
@@ -167,6 +170,65 @@ function refreshMarkers() {
   }
 }
 
+// ---------- licensed farm sites (MAST register) ----------
+const esc = (x) => String(x ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const farmColor = (c) => css(c === "sea" ? "--series-1" : c === "shellfish" ? "--series-2" : "--muted");
+const FARM_KIND = { sea: "Sea-pen site", shellfish: "Shellfish site", land: "Land-based farm" };
+let farmLayer = null;
+
+function farmPopup(p) {
+  const row = (k, v) => (v == null || v === "" ? "" : `<span class="k">${k}:</span> ${esc(v)}<br>`);
+  const area = p.analysis_site
+    ? `Data from analysis area <a href="#" data-open="${esc(p.analysis_site)}">${esc(p.analysis_site)}</a> (${p.analysis_km} km)`
+    : `<span class="k">Not covered by an analysis area (nearest is ${p.analysis_km} km away)</span>`;
+  return `<div class="farmpop"><b>${esc(p.name)}</b><br>${esc(p.company)}<br>
+    ${row("Type", FARM_KIND[p.category] + (p.category === "land" && p.farming ? ` (${p.farming})` : ""))}
+    ${row("Fjord", p.fjord)}${row("Licence", [p.licence, p.status].filter(Boolean).join(", "))}
+    ${row("In use", p.in_use == null ? null : p.in_use ? "yes" : "no")}
+    ${row("Biomass limit", p.biomass_limit_t ? `${p.biomass_limit_t.toLocaleString("en")} t` : null)}
+    ${row("Species", p.species?.join(", "))}${area}</div>`;
+}
+
+async function drawFarms() {
+  const fc = await fetch("/api/farms").then((r) => r.json()).catch(() => ({ features: [] }));
+  state.farms = fc.features.map((f) => f.properties);
+  farmLayer = L.layerGroup();
+  for (const f of fc.features) {
+    const p = f.properties, color = farmColor(p.category);
+    // licence polygons are small, so each site also gets a dot that stays visible when zoomed out
+    const dot = L.circleMarker([p.lat, p.lon], { pane: "farms", radius: 4, color: css("--marker-ring"), weight: 1, fillColor: color, fillOpacity: 1 });
+    const shape = f.geometry.type === "Point" ? null
+      : L.geoJSON(f.geometry, { pane: "farms", style: { color, weight: 1.5, fillColor: color, fillOpacity: 0.2 } });
+    for (const l of [dot, shape].filter(Boolean)) {
+      l.bindPopup(farmPopup(p)).bindTooltip(esc(p.name), { direction: "top", offset: [0, -4] });
+      farmLayer.addLayer(l);
+    }
+  }
+  const toggle = () => ($("farmToggle").checked ? farmLayer.addTo(map) : farmLayer.remove());
+  $("farmToggle").onchange = toggle;
+  toggle();
+}
+
+map.on("popupopen", (e) => e.popup.getElement().querySelectorAll("[data-open]").forEach((a) => a.onclick = (ev) => {
+  ev.preventDefault();
+  const s = state.sites.find((x) => x.name === a.dataset.open);
+  if (s) { map.closePopup(); openSite(s); }
+}));
+
+function renderFarms() {
+  const s = state.site, box = $("farmInfo");
+  const list = (state.farms || []).filter((p) => p.analysis_site === s.name).sort((a, b) => a.analysis_km - b.analysis_km);
+  if (s.kind === "hafro" && !list.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<h3>Licensed farm sites in this area (${list.length})</h3>
+    <div class="sub">From the MAST register: sites within 10 km of this point, so the data shown here applies to them. Click one to show it on the map.</div>` +
+    (list.length ? `<ul class="farmlist">${list.map((p, i) => `<li data-farm="${i}"><i class="dot farm ${p.category}"></i><b>${esc(p.name)}</b> · ${esc(p.company)} · ${FARM_KIND[p.category].toLowerCase()}${p.in_use === false ? " · not in use" : ""}</li>`).join("")}</ul>`
+      : `<div class="sub">No licensed farm site within 10 km of this point.</div>`);
+  box.querySelectorAll("[data-farm]").forEach((li) => li.onclick = () => {
+    const p = list[+li.dataset.farm];
+    map.setView([p.lat, p.lon], Math.max(map.getZoom(), 11));
+  });
+}
+
 async function loadSnapshot() {
   const d = currentDate();
   try { state.snapshot = await (await fetch(`/api/snapshot?date=${d}`)).json(); } catch { state.snapshot = {}; }
@@ -202,6 +264,7 @@ function renderPanel() {
   if (state.tab === "forecast" || state.tab === "model") { renderForecastSite(); return; }
   renderCharts();
   renderStats();
+  renderFarms();
   if (state.tab === "blooms") { renderSiteCalendar(); renderEvents(); renderPhenology(); renderToxic(); }
 }
 
@@ -562,6 +625,7 @@ function initTime() {
   initTime();
   document.querySelector('[data-window="all"]').textContent = `All of ${state.dates[0].slice(0, 4)}–${state.dates.at(-1).slice(0, 4)}`;
   drawSites();
+  await drawFarms();
   setTab(state.tab, !!urlLayer);
   const start = state.dates.indexOf(q.get("date") || `${state.dates.at(-1).slice(0, 4)}-05-15`);
   await setIdx(start >= 0 ? start : 0);
@@ -727,6 +791,6 @@ async function renderModelInfo() {
     <li>• Chlorophyll from space is ±40% and blind under cloud (about half the days) and in the polar night.</li>
     <li>• A "bloom" here means high biomass; it says nothing about toxicity.</li>
     <li>• Gap-filled chlorophyll is used with a 5-day delay, because the archive may fill a day using later images.</li>
-    <li>• Site points are approximate placeholders, not licensed farm positions.</li></ul>`;
+    <li>• Analysis points are approximate mid-fjord placeholders. Licensed farm sites (MAST) are shown on the map, but the models do not use them yet.</li></ul>`;
   $("modelInfo").innerHTML = html;
 }

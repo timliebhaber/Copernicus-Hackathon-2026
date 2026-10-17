@@ -19,5 +19,6 @@ if [ "$ALGAE_PROFILE" = full ]; then
   $PY src/train_bloom.py            # 3/7-day bloom forecast + metrics vs baselines
   $PY src/predict.py                # walk-forward daily forecasts for replay in the app
 fi
+$PY src/import_farms.py          # licensed farm sites (MAST register) for the map
 $PY src/make_tiles.py
 echo "== done. Start the app with:  ALGAE_PROFILE=$ALGAE_PROFILE .venv/bin/uvicorn api.main:app"

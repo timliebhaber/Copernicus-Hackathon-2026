@@ -129,6 +129,11 @@ select, input[type=date] {
 .dot.salmon { background: var(--series-1); }
 .dot.shellfish { background: var(--series-2); }
 .dot.hafro { background: var(--series-3); width: 10px; height: 10px; }
+.dot.farm { width: 8px; height: 8px; border-width: 1px; box-shadow: none; }
+.dot.farm.sea { background: var(--series-1); } .dot.farm.shellfish { background: var(--series-2); } .dot.farm.land { background: var(--muted); }
+.farmlist { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12px; }
+.farmlist li { padding: 3px 0; border-bottom: 1px solid var(--grid); }
+.farmpop .k { color: var(--muted); }
 .panelhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 12px; }
 
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }

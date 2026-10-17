@@ -82,6 +82,12 @@ HAFRO_STATIONS = [
 POINTS = SITES + HAFRO_STATIONS
 SITE_RADIUS_KM = 10
 
+# Licensed aquaculture sites from MAST's register (sea pens, shellfish, land farms), shown on the map.
+# FARMS_DB is filled by ../aquaculture-data/fetch_aquaculture_is.py; src/import_farms.py turns it into
+# FARMS_FILE (same for both profiles). Data: Matvælastofnun (MAST).
+FARMS_DB = ROOT.parent / "aquaculture-data" / "aquaculture_is.db"
+FARMS_FILE = ROOT / "reference" / "mast_farms.geojson"
+
 # Bloom detection
 BLOOM_PERCENTILE = 95      # chl above this percentile of the pixel's 1998-2022 values for the date ...
 BLOOM_RATIO = 2.5          # ... and >= ratio * climatology (median)

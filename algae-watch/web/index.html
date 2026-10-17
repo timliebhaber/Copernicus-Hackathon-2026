@@ -29,6 +29,7 @@
         <label for="layerSelect" class="label">Map layer</label>
         <select id="layerSelect"></select>
         <label class="check"><input type="checkbox" id="fjordToggle" checked> Fjord detail (300 m)</label>
+        <label class="check"><input type="checkbox" id="farmToggle" checked> Licensed farm sites (MAST)</label>
         <div class="seg only-forecast-card" role="group" aria-label="Forecast horizon" id="horizonSeg">
           <button class="on" data-h="3">Next 3 days</button><button data-h="7">Next 7 days</button>
         </div>
@@ -63,8 +64,11 @@
           <span><i class="dot salmon"></i> Salmon farming fjord</span>
           <span><i class="dot shellfish"></i> Shellfish area (toxin monitoring)</span>
           <span class="only-blooms"><i class="dot hafro"></i> Hafró toxic-algae station (2005–2019 samples)</span>
+          <span><i class="dot farm sea"></i> Licensed sea-pen site (MAST)</span>
+          <span><i class="dot farm shellfish"></i> Licensed shellfish site (MAST)</span>
+          <span><i class="dot farm land"></i> Land-based farm (MAST)</span>
         </div>
-        <p class="muted small">Site markers are <b>approximate placeholders</b> (mid-fjord points), not licensed farm coordinates.</p>
+        <p class="muted small">The large markers are <b>analysis points</b> (mid-fjord, approximate): data is averaged over the sea within 10 km of them. The small markers are the <b>licensed farm sites</b> from the MAST register; click one to see its licence and which analysis area covers it.</p>
         <div id="overview" class="only-blooms"></div>
         <div id="forecastList" class="only-forecast"></div>
         <div id="modelInfo" class="only-model"></div>
@@ -79,6 +83,7 @@
         </div>
         <div class="stats" id="stats"></div>
         <div id="forecastSite" class="only-forecast only-model"></div>
+        <div id="farmInfo" class="only-data only-blooms block"></div>
         <div id="toxicInfo" class="only-blooms block"></div>
         <div id="eventList" class="only-blooms block"></div>
         <div class="seg only-data only-blooms" role="group" aria-label="Chart window">
@@ -102,7 +107,7 @@
   <footer class="disclaimer">
     Prototype. Shows high-biomass blooms from satellite chlorophyll, not toxicity. Toxic species (Dinophysis, Alexandrium, Pseudo-nitzschia) are only detected by
     <a href="https://www.hafogvatn.is/is/rannsoknir/voktun-eiturthorunga" target="_blank" rel="noopener">Hafró/MAST water sampling</a>.
-    Not for operational decisions. Data: Copernicus Marine, Open-Meteo (ERA5).
+    Not for operational decisions. Data: Copernicus Marine, Open-Meteo (ERA5); farm sites: Matvælastofnun (MAST).
   </footer>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>

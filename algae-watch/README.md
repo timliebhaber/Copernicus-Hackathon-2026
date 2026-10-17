@@ -7,7 +7,7 @@ The web app shows:
 - **Blooms:** detected bloom events from 1998 to 2025, each with an algae type and a confidence level, plus the spring-bloom timing for each year.
 - **Model / Forecast:** coming next. This will be a 3–7 day bloom-risk forecast per site.
 
-> Prototype. The app detects **high-biomass blooms**, using satellite chlorophyll as the signal; it cannot measure toxicity. Toxic species (*Dinophysis*, *Alexandrium*, *Pseudo-nitzschia*) are only detected by Hafró/MAST water sampling. Do not use it for operational decisions. Site markers are approximate placeholder points (mid-fjord), not licensed farm coordinates.
+> Prototype. The app detects **high-biomass blooms**, using satellite chlorophyll as the signal; it cannot measure toxicity. Toxic species (*Dinophysis*, *Alexandrium*, *Pseudo-nitzschia*) are only detected by Hafró/MAST water sampling. Do not use it for operational decisions. The analysis points are approximate placeholder points (mid-fjord), not licensed farm coordinates; the real licensed sites from the MAST register are drawn on the map alongside them.
 
 ## Which blooms matter in Iceland
 
@@ -72,6 +72,7 @@ All gains are statistically significant. For brand-new blooms, precision is stil
 | Waves | `cmems_mod_glo_wav_my_0.2deg_PT3H-i` | 0.2°, 3-hourly | 2016–2025 |
 | Surface salinity (observations) | `cmems_obs-mob_glo_phy-sss_my_multi_P1D` | 0.125° | 2016–2025 |
 | Weather (wind, sunlight, air temperature, rain) | Open-Meteo archive (ERA5) | ~25 km | 1998–2025 |
+| Licensed aquaculture sites (sea pens, shellfish, land farms) | MAST register, WFS `geoserver.mast.is` (not Copernicus) | licence polygons / points | current |
 
 The Atlantic 1 km ocean-colour products stop at 66.0°N, which would cut off the north coast and the Westfjords, so this project uses the global products. Note that the ocean-colour dataset version `202603` is scheduled to be retired on 2026-11-24.
 
@@ -111,6 +112,7 @@ Prefix each command with `ALGAE_PROFILE=sample` to work on the sample instead.
 .venv/bin/python src/download_weather.py --start 1998-01-01 --end 2025-12-31
 .venv/bin/python src/build_site_series.py                   # per-site daily series
 .venv/bin/python src/detect_blooms.py                       # climatology, bloom events, phenology
+.venv/bin/python src/import_farms.py                        # licensed farm sites -> reference/mast_farms.geojson; --refresh re-downloads
 .venv/bin/python src/make_tiles.py                          # map overlays for the web app
 .venv/bin/python src/data_quality.py                        # precision report (optional)
 ```
@@ -126,8 +128,10 @@ Prefix each command with `ALGAE_PROFILE=sample` to work on the sample instead.
 config.py            regions, sites, dates, thresholds, dataset IDs
 src/                 download, processing, bloom detection, map tiles, data quality
 api/main.py          FastAPI: /api/sites, /api/manifest, /api/timeseries, /api/events,
-                     /api/phenology, /api/calendar, /api/snapshot + static web app
+                     /api/phenology, /api/calendar, /api/snapshot, /api/farms + static web app
 web/                 Leaflet + Chart.js single page, no build step
+reference/           mast_farms.geojson: licensed farm sites (Data: Matvælastofnun (MAST))
+../aquaculture-data/ fetch_aquaculture_is.py + aquaculture_is.db: MAST register download (SQLite)
 data/                raw NetCDF + processed parquet/PNG (gitignored)
 ```
 

@@ -69,8 +69,24 @@ def clean(df):
 
 @app.get("/api/sites")
 def sites():
-    return [{**s, "slug": common.slug(s["name"]), "placeholder": config.SITES_ARE_PLACEHOLDERS}
-            for s in config.POINTS]
+    n = {}
+    for f in farms().get("features", []):
+        a = f["properties"]["analysis_site"]
+        n[a] = n.get(a, 0) + 1
+    return [{**s, "slug": common.slug(s["name"]), "placeholder": config.SITES_ARE_PLACEHOLDERS,
+             "farms": n.get(s["name"], 0)} for s in config.POINTS]
+
+
+@lru_cache
+def farms():
+    f = config.FARMS_FILE
+    return json.loads(f.read_text()) if f.exists() else {"type": "FeatureCollection", "features": []}
+
+
+@app.get("/api/farms")
+def farm_sites():
+    """Licensed aquaculture sites from MAST (GeoJSON), each linked to its analysis area if within range."""
+    return farms()
 
 
 @lru_cache
@@ -170,6 +186,8 @@ def forecast_day(date: str):
 def forecast_series(site: str, start: str | None = None, end: str | None = None):
     """Daily forecast history for one site (risk vs what actually happened)."""
     f = forecast()
+    if f.empty:
+        raise HTTPException(503, "Run src/predict.py first")
     d = f[f.site == site]
     if start:
         d = d[d.date >= start]
