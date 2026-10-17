@@ -39,15 +39,16 @@ DATASETS = {
 # Algae groups, reflectance, 300 m, turbidity, nutrients, waves: 2016-2025 (Sentinel-3 OLCI era).
 if PROFILE == "full":
     START_DATE = "1998-01-01"
-    END_DATE = "2025-12-31"
+    END_DATE = "2026-12-31"         # the running year 2026 is filled up to the latest available day
     BASELINE_YEARS = (1998, 2022)   # "normal" chlorophyll climatology is computed from these years
-    APP_YEARS = (2016, 2025)        # years rendered as map layers in the web app
+    APP_YEARS = (2016, 2026)        # years rendered as map layers in the web app
 else:  # quick test: two years; the "normal" level is then only a 2-year median (rough)
     START_DATE = "2023-01-01"
     END_DATE = "2024-12-31"
     BASELINE_YEARS = (2023, 2024)
     APP_YEARS = (2023, 2024)
 FIRST_YEAR, LAST_YEAR = int(START_DATE[:4]), int(END_DATE[:4])
+CURRENT_YEAR = 2026   # partial year: archive + near-real-time continuation (download_copernicus.py)
 
 HORIZONS = [3, 7]
 

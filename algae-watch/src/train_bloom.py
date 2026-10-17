@@ -77,6 +77,7 @@ def build_features(chl_lag=CHL_LAG_DEFAULT):
         ["site", "date", "chl_clim", "chl_anomaly_ratio", "bloom_fraction", "candidate_bloom", "is_bloom",
          "observed_bloom"]]
     s = s.merge(b, on=["site", "date"], how="left")
+    last_obs = s.loc[s.chl.notna(), "date"].max()  # no forecasts issued after the latest satellite day
     sites = sorted(s.site.unique())
     out = []
     for site, g in s.groupby("site"):
@@ -137,7 +138,8 @@ def build_features(chl_lag=CHL_LAG_DEFAULT):
         out.append(f.reset_index())
     df = pd.concat(out, ignore_index=True)
     df["month"] = df.date.dt.month
-    return df[df.month.between(*SEASON) & df.chl_7d.notna()].reset_index(drop=True), sites
+    keep = df.month.between(*SEASON) & df.chl_7d.notna() & (df.date <= last_obs)
+    return df[keep].reset_index(drop=True), sites
 
 
 PARAMS = dict(objective="binary", learning_rate=0.05, num_leaves=31, min_child_samples=50,

@@ -27,6 +27,7 @@ const ICONS = {
   currents: '<path d="M3 8h14l-3-3"/><path d="M21 16H7l3 3"/>',
   waves: '<path d="M2 15c2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2 2.5 2 5 2"/><path d="M2 9c2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2 2.5 2 5 2"/>',
   rrs555: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
+  pin: '<path d="M12 21s-6-5.6-6-11a6 6 0 1 1 12 0c0 5.4-6 11-6 11Z"/><circle cx="12" cy="10" r="2.2"/>',
 };
 const icon = (k, cls = "") => `<svg viewBox="0 0 24 24" class="${cls}">${ICONS[k] || ""}</svg>`;
 const FMT = {
@@ -564,29 +565,46 @@ function initSearch() {
 async function openHow() {
   const dlg = $("#how");
   if (!S.conf) { try { S.conf = await api("/api/confidence"); } catch { S.conf = {}; } }
-  const R = S.cfg.rule, C = S.conf, cal = C.calibration?.["3d"], B = C.bloom?.["3d"];
-  const doc = (C.validation?.documented_events || []).find((e) => e.kind === "coccolithophore");
+  const R = S.cfg.rule, C = S.conf, V = C.validation || {};
+  const [y0, y1] = S.cfg.years ? [1998, S.cfg.years[1]] : [1998, 2026];
+  const nSea = S.farms.filter((f) => f.kind === "sea").length, nShell = S.farms.length - nSea;
+  const docs = V.documented_events || [];
+  const milky = docs.find((e) => e.kind === "coccolithophore"), spring = docs.find((e) => e.kind === "high-biomass");
+  const ph = V.phenology_vs_literature, tox = V.hafro_toxic_vs_satellite;
+  const data = [
+    ["chl", "Chlorophyll from space", `Copernicus ocean colour, daily, ${y0}–${y1}. 4 km everywhere, 300 m in the fjords.`],
+    ["sst", "Sea temperature", "OSTIA satellite analysis, daily."],
+    ["mixed_layer", "Salinity, surface layer, currents", "GLORYS ocean model, daily."],
+    ["waves", "Waves and weather", "Copernicus wave model; wind, sunlight, air temperature and rain from ERA5."],
+    ["rrs555", "Milky water", "Green-light reflectance from the same satellites."],
+    ["pin", "Farm locations", `MAST licence register: ${nSea} sea-pen and ${nShell} shellfish sites.`],
+  ];
+  const checks = [
+    `Algae above <b>${R.min_chl} mg/m³</b>`,
+    `At least <b>${R.ratio}×</b> the normal level for that place and date`,
+    `Rarer than <b>${R.percentile}%</b> of days on that date (${R.baseline[0]}–${R.baseline[1]})`,
+    `Covers <b>${Math.round(R.area * 100)}%</b> or more of the sea within ${R.radius_km} km of the farm`,
+    `Lasts <b>3 days</b> or more`,
+    `Seen by the satellite on at least one <b>clear day</b>`,
+  ];
+  const verified = [
+    milky && [milky.result.startsWith("DETECTED"), "Westfjords milky-water bloom, September 2022",
+      `Hafró sampled it on 5–7 Sep (4.7–6.3 million cells per litre). We found it at ${milky.detected_at.length} Arnarfjörður farms from ${fmtShort(milky.first_detection)}.`],
+    spring && [spring.result.startsWith("DETECTED"), "Spring 2021 bloom linked to salmon losses",
+      `MAST reported algae-related losses in spring 2021. We found a bloom at Arnarfjörður farms from ${fmtShort(spring.first_detection)}. The reports did not name the fjords.`],
+    ph && [true, "Timing of the yearly spring bloom", `Our median peak is ${ph.median_peak}; research on Icelandic waters says it usually peaks in May.`],
+    tox && [true, "What satellites cannot see", `Toxic algae found by Hafró did not show up as chlorophyll blooms (${pct(tox.share_toxic_samples_with_satellite_bloom)} vs ${pct(tox.share_clean_samples_with_satellite_bloom)}), so we don't claim to detect them.`],
+  ].filter(Boolean);
   dlg.querySelector("#howSteps").innerHTML = `
-    <div class="step"><div class="n">1</div><h2>We watch the sea from space</h2>
-      <p>Every day, Copernicus satellites measure <b>chlorophyll</b>, the green pigment in algae. More chlorophyll means more algae.</p>
-      <ul><li>Daily since 1998, at ${S.farms.length} licensed farms (MAST register)</li>
-      <li>Plus sea temperature, salinity, the surface layer, currents, waves and weather</li>
-      <li>Clouds hide the sea about half the days, and the polar night all winter</li></ul>
-      <div class="stat"><b>±40%</b><span>typical error of one satellite chlorophyll value, so we compare each place with its own normal</span></div></div>
-    <div class="step"><div class="n">2</div><h2>We call it a bloom when…</h2>
-      <ul><li>algae are above <b>${R.min_chl} mg/m³</b></li>
-      <li>at least <b>${R.ratio}×</b> the normal level for that place and date</li>
-      <li>rarer than <b>${R.percentile}%</b> of days on that date (${R.baseline[0]}–${R.baseline[1]})</li>
-      <li>covering <b>≥${Math.round(R.area * 100)}%</b> of the sea within ${R.radius_km} km of the farm</li>
-      <li>lasting <b>3+ days</b>, and seen on at least one <b>clear day</b></li></ul>
-      <p style="margin-top:8px">Milky-water (coccolithophore) blooms are found separately, from very bright green light.</p>
-      ${doc ? `<div class="stat"><b>✓ Verified</b><span>${esc(doc.event.split("(")[0].trim())}: found from ${fmtShort(doc.first_detection)}, before Hafró's first water sample</span></div>` : ""}</div>
-    <div class="step"><div class="n">3</div><h2>We forecast 3–7 days ahead</h2>
-      <p>A model learned from 1998–2018 which conditions come before a bloom: recent clear-sky chlorophyll, how unusual it is, the season, sea temperature and the surface layer.</p>
-      ${cal ? `<div class="stat"><b>${pct(cal.high_precision)}</b><span>of "high risk" forecasts were followed by a bloom within 3 days (${cal.years}, out of sample)</span></div>` : ""}
-      ${C.early_warning ? `<div class="stat"><b>${pct(C.early_warning.flagged_by_day2)}</b><span>of ${C.early_warning.blooms.toLocaleString("en")} farm blooms (${C.early_warning.years}) were flagged medium or high by their second day</span></div>
-      <p style="margin-top:10px"><b>Honest limit:</b> warning <i>before</i> a bloom starts is still weak. Only ${pct(C.early_warning.warned_7d_before)} of blooms got a medium warning in the week before, and ${pct(C.early_warning.warned_3d_before)} in the 3 days before.</p>` : ""}
-      ${B ? `<p style="margin-top:10px">Tested on ${B.test_years}, years it never saw: much better than "a bloom will continue" (ROC-AUC ${B.model.roc_auc.toFixed(2)} vs ${B.baseline_persistence.roc_auc.toFixed(2)}) or the usual rate for the season (${B.baseline_seasonal.roc_auc.toFixed(2)}).</p>` : ""}</div>`;
+    <div class="step"><div class="n">1</div><h2>The data we use</h2>
+      <ul class="datalist">${data.map(([k, t, d]) => `<li>${icon(k)}<div><b>${t}</b><span>${d}</span></div></li>`).join("")}</ul>
+      <p class="hint">Clouds hide the sea on about half the days, and the polar night blinds the satellites from November to February.</p></div>
+    <div class="step"><div class="n">2</div><h2>What counts as a bloom</h2>
+      <p>Chlorophyll is the green pigment in algae. A farm is in a bloom when <b>all six</b> are true:</p>
+      <ol class="rulelist">${checks.map((c) => `<li><span>${c}</span></li>`).join("")}</ol>
+      <p class="hint">Milky-water (coccolithophore) blooms are found separately: very bright green light, at least 3× normal, on 2 or more clear days.</p></div>
+    <div class="step"><div class="n">3</div><h2>What we verified</h2>
+      <ul class="vlist">${verified.map(([ok, t, d]) => `<li><span class="vmark ${ok ? "ok" : ""}">${ok ? "✓" : "–"}</span><div><b>${t}</b><span>${d}</span></div></li>`).join("")}</ul></div>`;
   dlg.showModal();
 }
 $("#howBtn").onclick = openHow;

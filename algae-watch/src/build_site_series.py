@@ -126,7 +126,9 @@ def main():
     out = out.reset_index()
     out["sst"] = out["sst"] - 273.15  # OSTIA is in Kelvin
     out["current_speed"] = np.hypot(out.current_u, out.current_v)
-    w = pd.read_parquet(config.RAW / f"weather_iceland_{config.START_DATE[:4]}_{config.END_DATE[:4]}.parquet")
+    # weather comes in period files (e.g. 1998-2025 and the running year): use them all
+    wf = sorted(config.RAW.glob("weather_iceland_*.parquet"))
+    w = pd.concat([pd.read_parquet(f) for f in wf]).drop_duplicates(["date", "site"], keep="last")
     out = out.merge(w, on=["date", "site"], how="left")
 
     config.PROCESSED.mkdir(parents=True, exist_ok=True)

@@ -146,8 +146,23 @@ data/                raw NetCDF + processed parquet/PNG (gitignored)
 - Guðmundsson, K. et al. (2016). A regional correction model for satellite surface chlorophyll concentrations, based on measurements from sea water samples collected around Iceland. *Methods in Oceanography* 17:83–96.
 - Hafró, toxic algae monitoring: https://www.hafogvatn.is/is/rannsoknir/voktun-eiturthorunga
 
+### The running year (2026)
+2026 is filled close to today. Each stream uses its reprocessed archive while it lasts, then continues with the near-real-time or analysis product, regridded onto the archive grid:
+
+| Stream | Archive until | Then |
+|---|---|---|
+| Chlorophyll (gap-free) | 9 Oct | NRT gap-free, to 16 Oct |
+| Algae groups, milky water, turbidity, 300 m | 9 Oct | none |
+| Sea temperature | 30 Jun | OSTIA NRT, to 16 Oct |
+| Salinity, surface layer, currents | 25 Aug | GLORYS analysis, capped at today |
+| Waves | 31 Jul | Wave analysis, capped at today |
+
+To update with new days: `python src/download_copernicus.py --years 2026 --refresh-current`, then rerun the pipeline. Forecasts are only issued up to the latest satellite day.
+
+**2026 so far:** a quiet year for high-chlorophyll blooms at farms. Around Iceland, chlorophyll was normal on average (95th percentile 3.2 mg/m³) but had the fewest extreme patches of the decade (99th percentile 5.8, against 6.4–9.1 in 2016–2025). The year's story is milky-water (coccolithophore) blooms: 56 confirmed events, peaking at 16 farms on 11–12 July. Inside the fjords, the 300 m data shows high chlorophyll on many days that the 4 km data misses, and the bloom rule only uses the 4 km data.
+
 ### Notes on the farm-based run
-- Open-Meteo has a daily quota. 24 of the 33 weather grid cells currently borrow the nearest already-downloaded series (`--offline`): at most 53 km away, usually under 30 km. Rerun without `--offline` on another day to fill them in.
+- Open-Meteo has a daily quota. For 1998–2025, 22 of the 33 weather grid cells still borrow the nearest downloaded series (`--offline`): at most 53 km away, usually under 30 km. 2026 has all 33 cells. Rerun without `--offline` on another day to fill in the rest.
 - 300 m fjord chlorophyll is available for 49 of the 89 points (farms inside the nine 300 m boxes); the others use 4 km data only.
 - Validation with farms: Hafró's Sep 2022 Westfjords coccolithophore bloom is detected as **confirmed** at 12 Arnarfjörður/Dýrafjörður farms from 3 Sep 2022. The spring 2021 losses show a confirmed bloom at two Arnarfjörður farms from 2 May 2021.
 - Bloom forecast with farms (test 2019–2025, 148,527 farm-days): ROC-AUC 0.85 for 3 days and 0.80 for 7 days, against 0.74/0.69 for persistence and 0.62/0.63 for seasonal. The bootstrap resamples whole area-years, because farms in one fjord share the same water.
