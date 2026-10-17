@@ -332,18 +332,12 @@ function cardForecast(D) {
   const F = D.forecast;
   if (!F) return `<div class="status"><div class="icon">${icon("anomaly")}</div><div><div class="big">No forecast this day</div>
     <div class="small">Forecasts run March–October, when satellites can see the sea.</div></div></div>`;
-  const h = S.horizon, X = F[`${h}d`], c = X.confidence;
-  const sure = c ? `When we say <b>${c.range}</b>, a bloom followed <b>${pct(c.observed)}</b> of the time
-    <span class="muted">(${c.n.toLocaleString("en")} past forecasts, ${c.years})</span>.` : "";
+  const h = S.horizon, X = F[`${h}d`];
   const happened = X.happened == null ? "" : `<div class="happened">${X.happened ? `<span style="color:var(--bloom)">●</span> <span>What really happened: <b>a bloom came</b> within ${h} days.</span>`
     : `<span style="color:var(--low)">●</span> <span>What really happened: <b>no bloom</b> within ${h} days.</span>`}</div>`;
   return `
     <div class="gauges">${gauge(3, F["3d"])}${gauge(7, F["7d"])}</div>
-    <div class="block"><h3>How sure are we?</h3><div class="sure">${sure || "Not enough past forecasts at this level."}</div></div>
-    <div class="block"><h3>Why <span class="muted">what pushed the ${h}-day risk up</span></h3>
-      <ul class="why">${X.factors.length ? X.factors.slice(0, 4).map((x) => `<li><i></i><span>${esc(x.text)}</span></li>`).join("")
-        : "<li><i style='background:var(--low)'></i><span>Nothing unusual: conditions look like a normal day for this farm.</span></li>"}</ul>
-      ${happened}</div>
+    ${happened}
     <div class="block"><h3>Risk over time <span class="muted">past 60 days</span></h3>${riskChart(F.series, D.date)}
       <div class="chartkey"><span><i style="background:var(--accent)"></i>3-day risk</span><span><i style="background:var(--medium)"></i>7-day risk</span>
       <span><i class="band" style="background:rgba(255,55,95,.35)"></i>Confirmed bloom</span></div></div>
