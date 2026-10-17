@@ -589,8 +589,9 @@ async function openHow() {
       ${doc ? `<div class="stat"><b>✓ Verified</b><span>${esc(doc.event.split("(")[0].trim())}: found from ${fmtShort(doc.first_detection)}, before Hafró's first water sample</span></div>` : ""}</div>
     <div class="step"><div class="n">3</div><h2>We forecast 3–7 days ahead</h2>
       <p>A model learned from 1998–2018 which conditions come before a bloom: recent clear-sky chlorophyll, how unusual it is, the season, sea temperature and the surface layer.</p>
-      ${cal ? `<div class="stat"><b>${pct(cal.high_precision)}</b><span>of "high risk" forecasts were followed by a bloom within 3 days (${cal.years}, out of sample)</span></div>
-      <div class="stat"><b>${pct(cal.caught_medium_or_high)}</b><span>of blooms got at least a medium-risk warning 3 days before</span></div>` : ""}
+      ${cal ? `<div class="stat"><b>${pct(cal.high_precision)}</b><span>of "high risk" forecasts were followed by a bloom within 3 days (${cal.years}, out of sample)</span></div>` : ""}
+      ${C.early_warning ? `<div class="stat"><b>${pct(C.early_warning.flagged_by_day2)}</b><span>of ${C.early_warning.blooms.toLocaleString("en")} farm blooms (${C.early_warning.years}) were flagged medium or high by their second day</span></div>
+      <p style="margin-top:10px"><b>Honest limit:</b> warning <i>before</i> a bloom starts is still weak. Only ${pct(C.early_warning.warned_7d_before)} of blooms got a medium warning in the week before, and ${pct(C.early_warning.warned_3d_before)} in the 3 days before.</p>` : ""}
       ${B ? `<p style="margin-top:10px">Tested on ${B.test_years}, years it never saw: much better than "a bloom will continue" (ROC-AUC ${B.model.roc_auc.toFixed(2)} vs ${B.baseline_persistence.roc_auc.toFixed(2)}) or the usual rate for the season (${B.baseline_seasonal.roc_auc.toFixed(2)}).</p>` : ""}</div>`;
   dlg.showModal();
 }

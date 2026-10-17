@@ -248,6 +248,32 @@ def calibration():
     return out
 
 
+@lru_cache
+def early_warning():
+    """Per confirmed bloom (2019-2025, farms): was it flagged before it started, and how fast once it had?"""
+    fc = forecast()
+    if fc.empty:
+        return None
+    ev = events()
+    ev = ev[(ev.status == "confirmed") & (ev.kind == "high-biomass") & ev.site.isin(FARM_NAMES) & (ev.start.dt.year >= 2019)]
+    pre3, pre7, day2 = [], [], []
+    for e in ev.itertuples():
+        if e.site not in fc.index.get_level_values(0):
+            continue
+        s = fc.loc[e.site]
+        b3 = s.loc[e.start - pd.Timedelta(days=3): e.start - pd.Timedelta(days=1)]
+        b7 = s.loc[e.start - pd.Timedelta(days=7): e.start - pd.Timedelta(days=1)]
+        if b3.empty:
+            continue
+        pre3.append(b3.risk_3d.max() >= config.RISK_LOW)
+        pre7.append(b7.risk_7d.max() >= config.RISK_LOW)
+        d2 = s.loc[e.start: e.start + pd.Timedelta(days=1)]
+        day2.append(bool(len(d2)) and d2.risk_3d.max() >= config.RISK_LOW)
+    n = len(pre3)
+    return {"blooms": n, "years": "2019–2025", "warned_3d_before": float(np.mean(pre3)) if n else None,
+            "warned_7d_before": float(np.mean(pre7)) if n else None, "flagged_by_day2": float(np.mean(day2)) if n else None}
+
+
 @app.get("/api/confidence")
 def confidence():
     m = {}
@@ -256,6 +282,7 @@ def confidence():
                     ("validation", config.PROCESSED / "validation.json")]:
         m[name] = json.loads(f.read_text()) if f.exists() else None
     m["calibration"] = calibration()
+    m["early_warning"] = early_warning()
     return m
 
 
