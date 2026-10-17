@@ -35,8 +35,10 @@ def series():
     s = pd.read_parquet(f)
     b = config.PROCESSED / "blooms.parquet"
     if b.exists():
-        bl = pd.read_parquet(b)[["date", "site", "chl_clim", "chl_anomaly_ratio", "bloom_fraction",
-                                 "is_bloom", "observed_bloom"]]
+        cols = ["date", "site", "chl_clim", "chl_anomaly_ratio", "bloom_fraction", "candidate_bloom",
+                "is_bloom", "observed_bloom", "cocco_day", "is_cocco"]
+        bl = pd.read_parquet(b)
+        bl = bl[[c for c in cols if c in bl.columns]]
         s = s.merge(bl, on=["date", "site"], how="left")
     return s
 
@@ -68,7 +70,26 @@ def clean(df):
 @app.get("/api/sites")
 def sites():
     return [{**s, "slug": common.slug(s["name"]), "placeholder": config.SITES_ARE_PLACEHOLDERS}
-            for s in config.SITES]
+            for s in config.POINTS]
+
+
+@lru_cache
+def toxic():
+    f = config.PROCESSED / "hafro_toxic.parquet"
+    return pd.read_parquet(f) if f.exists() else pd.DataFrame()
+
+
+@app.get("/api/toxic")
+def toxic_samples(station: str):
+    """Hafró toxic-algae monitoring entries for one station (2005-2019)."""
+    t = toxic()
+    if t.empty:
+        return []
+    t = t[t.station == station].sort_values("date", ascending=False)
+    cols = ["date", "any_above", "dinophysis_above", "alexandrium_above", "pseudo_nitzschia_above",
+            "dinophysis_present", "alexandrium_present", "pseudo_nitzschia_present",
+            "alexandrium_cells_per_l", "dinophysis_cells_per_l", "pseudo_nitzschia_cells_per_l", "warning", "text"]
+    return records(t[cols])
 
 
 @app.get("/api/manifest")
@@ -87,8 +108,8 @@ def timeseries(site: str, start: str | None = None, end: str | None = None):
     df = df[(df.site == site) & (df.date >= start) & (df.date <= end)]
     if df.empty:
         raise HTTPException(404, f"unknown site {site}")
-    cols = [c for c in TS_COLS + ["chl_clim", "chl_anomaly_ratio", "bloom_fraction", "is_bloom", "observed_bloom"]
-            if c in df.columns]
+    cols = [c for c in TS_COLS + ["chl_clim", "chl_anomaly_ratio", "bloom_fraction", "candidate_bloom",
+                                  "is_bloom", "observed_bloom", "cocco_day", "is_cocco"] if c in df.columns]
     return clean(df[cols].sort_values("date"))
 
 
@@ -133,7 +154,7 @@ def snapshot(date: str):
     df = series()
     df = df[df.date == pd.Timestamp(date)]
     cols = [c for c in ["site", "chl", "chl_300m", "sst", "rrs555", "haptophytes", "diatoms",
-                        "chl_anomaly_ratio", "is_bloom"] if c in df.columns]
+                        "chl_anomaly_ratio", "is_bloom", "is_cocco"] if c in df.columns]
     return {r["site"]: {k: (None if pd.isna(r[k]) else round(float(r[k]), 3)) for k in cols[1:]}
             for r in df[cols].to_dict("records")}
 

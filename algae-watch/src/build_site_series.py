@@ -22,6 +22,7 @@ warnings.simplefilter("ignore", RuntimeWarning)
 # stream -> (radius_km, {variable: output column}, valid-fraction column or None)
 STREAMS = {
     "chl_l4": (10, {"CHL": "chl", "CHL_uncertainty": "chl_unc"}, None),
+    "chl_l3_early": (10, {"CHL": "chl_obs"}, "chl_obs_valid"),
     "pft_l3": (10, {"CHL": "chl_obs", "DIATO": "diatoms", "DINO": "dinoflagellates", "HAPTO": "haptophytes"}, "chl_obs_valid"),
     "rrs_l3": (10, {"RRS555": "rrs555", "RRS443": "rrs443"}, None),
     "transp": (10, {"ZSD": "secchi", "KD490": "kd490"}, None),
@@ -49,7 +50,7 @@ def stream_site_means(prefix, radius, varmap, valid_col):
     for f in files:
         ds = xr.open_dataset(f)
         if masks is None:
-            masks = {s["name"]: common.site_mask(ds, s, radius_km=radius) for s in config.SITES}
+            masks = {s["name"]: common.site_mask(ds, s, radius_km=radius) for s in config.POINTS}
         t = pd.to_datetime(ds.time.values)
         for name, m in masks.items():
             cols = {}
@@ -74,7 +75,7 @@ def stream_site_means(prefix, radius, varmap, valid_col):
 
 def chl300_means():
     frames = []
-    for s in config.SITES:
+    for s in config.POINTS:
         files = sorted(config.RAW.glob(f"chl300_{common.slug(s['name'])}_iceland_[0-9][0-9][0-9][0-9].nc"))
         for f in files:
             ds = xr.open_dataset(f)
@@ -95,12 +96,16 @@ def chl300_means():
 
 def main():
     dates = pd.date_range(config.START_DATE, config.END_DATE, freq="D")
-    idx = pd.MultiIndex.from_product([[s["name"] for s in config.SITES], dates], names=["site", "date"])
+    idx = pd.MultiIndex.from_product([[s["name"] for s in config.POINTS], dates], names=["site", "date"])
     out = pd.DataFrame(index=idx)
     for prefix, (radius, varmap, valid_col) in STREAMS.items():
         df = stream_site_means(prefix, radius, varmap, valid_col)
         if df is not None:
-            out = out.join(df[~df.index.duplicated()], how="left")
+            df = df[~df.index.duplicated()]
+            shared = [c for c in df.columns if c in out.columns]  # e.g. chl_obs from two periods
+            for c in shared:
+                out[c] = out[c].combine_first(df[c].reindex(out.index))
+            out = out.join(df.drop(columns=shared), how="left")
     c = chl300_means()
     if c is not None:
         out = out.join(c[~c.index.duplicated()], how="left")

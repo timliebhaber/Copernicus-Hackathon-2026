@@ -18,13 +18,26 @@ The web app shows:
 | Fish-killing blooms near salmon pens (e.g. 2021 losses reported by MAST; Seyðisfjörður) | **Yes** | Partly: chlorophyll spike and the haptophyte fraction |
 | Shellfish-toxin species (DSP/PSP/ASP) | **Yes**, for anyone eating the shellfish | **No**: too few cells to show up; only water sampling detects them |
 
-## How blooms are detected
-1. **Normal level:** for each 4 km pixel and day of year, the median chlorophyll over 1998–2022, using a ±15-day window.
-2. **Bloom:** a site-day counts as a bloom when chlorophyll is **≥ 2.5× normal and ≥ 3 mg/m³** on ≥ 10% of the sea within 10 km of the site.
-3. **Events** are labelled with:
-   - **type:** diatoms, haptophytes or dinoflagellates from the algae-group product; coccolithophores when 555 nm reflectance is high
-   - **confidence:** high when a real cloud-free observation (4 km or 300 m) confirms the bloom; medium when only gap-filled data shows it; low in murky water (Secchi depth < 5 m)
-4. **Spring-bloom timing** is a shifted Gaussian fitted to each year's chlorophyll, following Zhai et al. (2012), *Cont. Shelf Res.* 37:15–25. The physical drivers (salinity, stratification, mixed layer) follow Gudmundsson (1998), *ICES J. Mar. Sci.* 55:635.
+## What is detected, and how
+| Bloom type | Signal | When it counts as **confirmed** |
+|---|---|---|
+| **Spring bloom** (natural, yearly) | Shifted Gaussian fitted to Mar–Jul chlorophyll (Zhai et al. 2012) | Fit r² > 0.3 |
+| **High-biomass bloom** (where fish-killing blooms would show) | Chlorophyll **≥ 2.5× normal** (1998–2022 median for that pixel and date, ±15 days) **and ≥ 3 mg/m³** on ≥ 10% of the sea within 10 km | Lasts **≥ 3 days**, is seen on **≥ 1 clear day** by a real (not gap-filled) observation, and the water is not murky (Secchi depth ≥ 5 m). Otherwise it is a *candidate*. |
+| **Coccolithophore bloom** (milky water, *E. huxleyi*) | 555 nm reflectance **≥ 0.008 sr⁻¹ and ≥ 3×** the site's normal for that month, May–Oct | Seen on **≥ 2 clear days** |
+| **Toxic algae** (*Dinophysis*, *Alexandrium*, *Pseudo-nitzschia*) | Not visible from space | A **7-day risk forecast** trained on Hafró samples (see below) |
+
+The algae type (diatoms, haptophytes, dinoflagellates) comes from Copernicus' satellite algae-group product. It is an estimate, not an identification.
+
+## Validation (`src/validate.py`)
+- **Documented events** (`validation/documented_events.csv`): the Sep 2022 Westfjords *E. huxleyi* bloom, which Hafró sampled at 4.7–6.3 million cells/L, shows up clearly as milky water (555 nm reflectance 0.013–0.022 against a normal of ~0.002) from 3 Sep onward. Chlorophyll alone misses it, which is why it gets its own detector.
+- **Hafró toxic samples vs satellite blooms:** a satellite bloom appeared near only 2% of toxic samples and 3% of clean ones. Toxic algae and chlorophyll blooms are different things, so a separate forecast is needed.
+- **Spring-bloom timing vs literature:** median peak around the end of May across 82 site-years. Gudmundsson (1998) found the bloom usually peaks in May.
+
+## Toxic-algae forecast (`src/scrape_hafro.py`, `src/train_toxic.py`)
+- **Labels:** 917 Hafró monitoring samples from 7 stations (2005–2019). The scraper parses Hafró's Icelandic text to find which genus was above the shellfish-poisoning threshold.
+- **Inputs:** conditions at the station **7 days before** each sample: sea temperature and its anomaly, salinity, mixed layer, chlorophyll and its anomaly, wind, sunlight, rain, season, and the last known result.
+- **Test:** trained on 2005–2014 and tested on 2015–2019, against seasonal and persistence baselines, with a bootstrap 95% interval.
+- **First result (any genus above threshold):** ROC-AUC 0.76, against 0.72 for the seasonal baseline and 0.65 for persistence. The gain is **not yet statistically significant** (interval −0.03 to +0.12). For *Dinophysis*, the model is worse than the seasonal baseline.
 
 ## Data (Iceland box: 63–67°N, 25–13°W)
 | Stream | Copernicus dataset ID | Resolution | Years |

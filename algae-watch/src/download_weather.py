@@ -48,7 +48,7 @@ def main():
         print(f"[cached] {out.name}")
         return
     frames = []
-    for s in config.SITES:
+    for s in config.POINTS:
         part = config.RAW / f".weather_{s['lat']}_{s['lon']}_{a.start}_{a.end}.parquet"
         if part.exists():
             frames.append(pd.read_parquet(part))

@@ -107,13 +107,15 @@ function preload(i) {
 }
 
 // ---------- sites ----------
+const kindColor = (k) => css(k === "salmon" ? "--series-1" : k === "shellfish" ? "--series-2" : "--series-3");
 const LABEL_DIR = { "Reyðarfjörður": "left", "Fáskrúðsfjörður": "right", "Dýrafjörður": "top", "Patreksfjörður": "left" };
 function drawSites() {
   for (const s of state.sites) {
-    const color = s.kind === "salmon" ? css("--series-1") : css("--series-2");
+    const color = kindColor(s.kind);
     const m = L.circleMarker([s.lat, s.lon], {
-      radius: 8, color: css("--marker-ring"), weight: 2, fillColor: color, fillOpacity: 1,
-    }).addTo(map);
+      radius: s.kind === "hafro" ? 6 : 8, color: css("--marker-ring"), weight: 2, fillColor: color, fillOpacity: 1,
+    });
+    if (s.kind !== "hafro") m.addTo(map);
     const dir = LABEL_DIR[s.name] || "right";
     const off = { right: [8, 0], left: [-8, 0], bottom: [0, 8], top: [0, -8] }[dir];
     m.bindTooltip(s.name, { permanent: true, direction: dir, offset: off, className: "sitelabel" });
@@ -122,7 +124,8 @@ function drawSites() {
       const v = state.snapshot[s.name] || {};
       const f = (x, d = 2) => (x == null ? "–" : x.toFixed(d));
       m.unbindPopup();
-      const status = v.is_bloom ? `<b style="color:${css("--critical")}">● Bloom detected</b> (${f(v.chl_anomaly_ratio, 1)}× normal)<br>` : "";
+      const status = v.is_bloom ? `<b style="color:${css("--critical")}">● Bloom detected</b> (${f(v.chl_anomaly_ratio, 1)}× normal)<br>`
+        : v.is_cocco ? `<b style="color:${css("--critical")}">● Milky water (coccolithophores)</b><br>` : "";
       m.bindPopup(`<b>${s.name}</b> · ${fmtDate(currentDate())}<br>${status}
         Chlorophyll: ${f(v.chl)} mg/m³ (300 m: ${f(v.chl_300m)})<br>
         Sea temp: ${f(v.sst, 1)} °C`, { closeButton: false, autoPan: false }).openPopup();
@@ -136,10 +139,16 @@ function refreshMarkers() {
   for (const s of state.sites) {
     const m = markers[s.name];
     if (!m) continue;
-    const bloom = state.tab === "blooms" && state.snapshot[s.name]?.is_bloom;
-    const base = s.kind === "salmon" ? css("--series-1") : css("--series-2");
-    m.setStyle({ fillColor: bloom ? css("--critical") : base, radius: bloom ? 11 : 8 });
-    m.setTooltipContent(bloom ? `${s.name} · bloom` : s.name);
+    if (s.kind === "hafro") {  // Hafró stations only on the Blooms tab
+      if (state.tab === "blooms" && !map.hasLayer(m)) m.addTo(map);
+      if (state.tab !== "blooms" && map.hasLayer(m)) map.removeLayer(m);
+    }
+    const v = state.snapshot[s.name] || {};
+    const bloom = state.tab === "blooms" && v.is_bloom;
+    const cocco = state.tab === "blooms" && v.is_cocco;
+    const r0 = s.kind === "hafro" ? 6 : 8;
+    m.setStyle({ fillColor: bloom || cocco ? css("--critical") : kindColor(s.kind), radius: bloom || cocco ? r0 + 3 : r0 });
+    m.setTooltipContent(bloom ? `${s.name} · bloom` : cocco ? `${s.name} · milky water` : s.name);
   }
 }
 
@@ -155,12 +164,14 @@ async function openSite(s) {
   $("panelEmpty").hidden = true;
   $("panelSite").hidden = false;
   $("siteName").textContent = s.name;
-  $("siteMeta").textContent = `${s.kind === "salmon" ? "Salmon farming fjord" : "Shellfish area"} · ${s.lat.toFixed(2)}°N ${Math.abs(s.lon).toFixed(2)}°W · approximate placeholder`;
+  const label = { salmon: "Salmon farming fjord", shellfish: "Shellfish area", hafro: "Hafró toxic-algae monitoring station" }[s.kind];
+  $("siteMeta").textContent = `${label} · ${s.lat.toFixed(2)}°N ${Math.abs(s.lon).toFixed(2)}°W · approximate location`;
   const q = encodeURIComponent(s.name);
-  [state.series, state.events, state.phenology] = await Promise.all([
+  [state.series, state.events, state.phenology, state.toxic] = await Promise.all([
     fetch(`/api/timeseries?site=${q}`).then((r) => r.json()),
     fetch(`/api/events?site=${q}`).then((r) => r.json()),
     fetch(`/api/phenology?site=${q}`).then((r) => r.json()),
+    s.kind === "hafro" ? fetch(`/api/toxic?station=${q}`).then((r) => r.json()) : Promise.resolve([]),
   ]);
   renderPanel();
 }
@@ -169,7 +180,7 @@ function renderPanel() {
   if (!state.site) { renderOverview(); return; }
   renderCharts();
   renderStats();
-  if (state.tab === "blooms") { renderSiteCalendar(); renderEvents(); renderPhenology(); }
+  if (state.tab === "blooms") { renderSiteCalendar(); renderEvents(); renderPhenology(); renderToxic(); }
 }
 
 document.querySelectorAll("[data-window]").forEach((b) => b.onclick = () => {
@@ -226,7 +237,7 @@ const CHARTS = [
 ];
 
 const BLOOM_CHARTS = [
-  { title: "Chlorophyll vs normal", sub: "mg/m³, log scale; red bands = detected bloom days", log: true, bands: true, series: [
+  { title: "Chlorophyll vs normal", sub: "mg/m³, log scale; red bands = confirmed bloom, blue bands = milky water (coccolithophores)", log: true, bands: true, series: [
     { key: "chl", name: "Chlorophyll (gap-free)", type: "line", c: "--series-1" },
     { key: "chl_clim", name: "Normal for the date (multi-year median)", type: "line", c: "--muted", dash: true },
     { key: "chl_300m", name: "Fjord 300 m observations", type: "dot", c: "--series-2" },
@@ -244,14 +255,18 @@ const BLOOM_CHARTS = [
 const bloomBands = {
   id: "bloomBands",
   beforeDatasetsDraw(chart, args, opts) {
-    const flags = chart.options.plugins.bloomBands?.flags;
-    if (!flags) return;
+    const o = chart.options.plugins.bloomBands || {};
+    if (!o.flags && !o.cocco) return;
     const { top, bottom } = chart.chartArea;
     const x = chart.scales.x;
     const w = Math.max(1, (x.getPixelForValue(1) - x.getPixelForValue(0)));
     const ctx = chart.ctx;
-    ctx.save(); ctx.fillStyle = css("--critical-wash");
-    flags.forEach((f, i) => { if (f === 1) ctx.fillRect(x.getPixelForValue(i) - w / 2, top, w, bottom - top); });
+    ctx.save();
+    for (const [arr, col] of [[o.flags, "--critical-wash"], [o.cocco, "--cocco-wash"]]) {
+      if (!arr) continue;
+      ctx.fillStyle = css(col);
+      arr.forEach((f, i) => { if (f === 1) ctx.fillRect(x.getPixelForValue(i) - w / 2, top, w, bottom - top); });
+    }
     ctx.restore();
   },
 };
@@ -309,7 +324,8 @@ function renderCharts() {
           if (i != null && i >= 0) setIdx(state.dates.indexOf(labels[Math.round(i)]));
         },
         plugins: {
-          bloomBands: { flags: spec.bands && S.is_bloom ? S.is_bloom.slice(lo, hi) : null },
+          bloomBands: { flags: spec.bands && S.is_bloom ? S.is_bloom.slice(lo, hi) : null,
+                        cocco: spec.bands && S.is_cocco ? S.is_cocco.slice(lo, hi) : null },
           legend: { display: false },
           tooltip: {
             backgroundColor: css("--surface"), titleColor: css("--text"), bodyColor: css("--text-2"),
@@ -419,15 +435,41 @@ function renderSiteCalendar() {
 }
 
 function renderEvents() {
-  const ev = state.events.filter((e) => e.start >= state.dates[0]);
+  const all = state.events.filter((e) => e.start >= state.dates[0]);
+  const ev = state.showCandidates ? all : all.filter((e) => e.status === "confirmed");
+  const nCand = all.length - all.filter((e) => e.status === "confirmed").length;
   const f = (x, d = 1) => (x == null ? "–" : (+x).toFixed(d));
   $("eventList").innerHTML = `<h3>Bloom events since ${state.dates[0].slice(0, 4)} (${ev.length})</h3>
-    <div class="sub">Click a row to jump to the bloom peak. Confidence: high = seen by a real (cloud-free) observation.</div>
-    <div class="tablewrap"><table class="events"><thead><tr><th>Start</th><th>Days</th><th>Peak</th><th>×normal</th><th>Type</th><th>Confidence</th></tr></thead>
-    <tbody>${ev.map((e) => `<tr data-jump="${e.peak_date}"><td class="nowrap">${shortDate(e.start)}</td><td>${e.days}</td>
+    <div class="sub">Confirmed = lasted ≥3 days and was seen on a clear day (milky water: ≥2 clear days). Click a row to jump to the peak.</div>
+    <label class="check small"><input type="checkbox" id="candToggle" ${state.showCandidates ? "checked" : ""}> also show ${nCand} unconfirmed candidates</label>
+    <div class="tablewrap"><table class="events"><thead><tr><th>Start</th><th>Kind</th><th>Days</th><th>Peak</th><th>×normal</th><th>Type (estimate)</th><th>Status</th></tr></thead>
+    <tbody>${ev.map((e) => `<tr data-jump="${e.peak_date}" title="${e.reason}"><td class="nowrap">${shortDate(e.start)}</td>
+      <td>${e.kind === "coccolithophore" ? "milky water" : "chlorophyll"}</td><td>${e.days}</td>
       <td>${f(e.peak_chl)}</td><td>${f(e.peak_ratio)}</td><td>${e.type}</td>
-      <td><span class="conf ${e.confidence.split(" ")[0]}">${e.confidence}</span></td></tr>`).join("") || `<tr><td colspan="6">No events detected</td></tr>`}</tbody></table></div>`;
+      <td><span class="conf ${e.status === "confirmed" ? "high" : "medium"}">${e.status}</span></td></tr>`).join("") || `<tr><td colspan="7">No confirmed events</td></tr>`}</tbody></table></div>`;
   $("eventList").querySelectorAll("[data-jump]").forEach((tr) => tr.onclick = () => jumpTo(tr.dataset.jump));
+  $("candToggle").onchange = (e) => { state.showCandidates = e.target.checked; renderEvents(); };
+}
+
+function renderToxic() {
+  const box = $("toxicInfo");
+  if (state.site?.kind !== "hafro" || !state.toxic?.length) { box.innerHTML = ""; return; }
+  const T = state.toxic;
+  const above = T.filter((t) => t.any_above);
+  const genus = (t) => ["dinophysis", "alexandrium", "pseudo_nitzschia"].filter((g) => t[`${g}_above`])
+    .map((g) => ({ dinophysis: "Dinophysis (DSP)", alexandrium: "Alexandrium (PSP)", pseudo_nitzschia: "Pseudo-nitzschia (ASP)" })[g]);
+  const years = [...new Set(T.map((t) => +t.date.slice(0, 4)))].sort();
+  const cnt = {}; T.forEach((t) => { const k = t.date.slice(0, 7); cnt[k] = cnt[k] || [0, 0]; cnt[k][1]++; if (t.any_above) cnt[k][0]++; });
+  const rows = years.map((y) => `<tr><th>${y}</th>${MONTHS.map((m, j) => {
+    const k = `${y}-${String(j + 1).padStart(2, "0")}`; const c = cnt[k];
+    if (!c) return `<td></td>`;
+    return `<td title="${k}: ${c[0]} of ${c[1]} samples above threshold" style="background:${c[0] ? heat(c[0], 3) : "var(--grid)"}">${c[0] || "·"}</td>`; }).join("")}</tr>`).join("");
+  box.innerHTML = `<h3>Toxic algae samples (Hafró, ${years[0]}–${years.at(-1)})</h3>
+    <div class="sub">${T.length} samples, ${above.length} with a toxic genus above the shellfish-poisoning threshold. Parsed automatically from Hafró's Icelandic text, so expect a few errors. Grey = sampled, nothing above threshold.</div>
+    <table class="heat"><thead><tr><th></th>${MONTHS.map((m) => `<th>${m}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>
+    <div class="tablewrap" style="margin-top:8px"><table class="events"><thead><tr><th>Date</th><th>Above threshold</th><th>Cells/L</th></tr></thead>
+    <tbody>${above.slice(0, 60).map((t) => `<tr title="${(t.text || "").replace(/"/g, "'").slice(0, 400)}"><td class="nowrap">${shortDate(t.date)}</td>
+      <td>${genus(t).join(", ")}</td><td>${[t.alexandrium_cells_per_l, t.dinophysis_cells_per_l, t.pseudo_nitzschia_cells_per_l].filter((x) => x).map((x) => Math.round(x).toLocaleString("en")).join(" / ") || "–"}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 let phenoChart = null;

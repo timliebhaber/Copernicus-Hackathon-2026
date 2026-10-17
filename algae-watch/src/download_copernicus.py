@@ -25,6 +25,8 @@ STREAMS = {
     "chl_l4": ("cmems_obs-oc_glo_bgc-plankton_my_l4-gapfree-multi-4km_P1D", ["CHL", "CHL_uncertainty"], False, LONG),
     "sst_ostia": ("METOFFICE-GLO-SST-L4-REP-OBS-SST", ["analysed_sst", "analysis_error"], False, LONG),
     "phys": ("cmems_mod_glo_phy_my_0.083deg_P1D-m", ["thetao", "so", "uo", "vo", "mlotst"], True, LONG),
+    # observed (cloud-free) chlorophyll before the OLCI era, to confirm older blooms
+    "chl_l3_early": ("cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D", ["CHL"], False, (1998, 2015)),
     "pft_l3": ("cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D", ["CHL", "DIATO", "DINO", "HAPTO"], False, OLCI),
     "rrs_l3": ("cmems_obs-oc_glo_bgc-reflectance_my_l3-multi-4km_P1D", ["RRS443", "RRS555"], False, OLCI),
     "transp": ("cmems_obs-oc_glo_bgc-transp_my_l4-gapfree-multi-4km_P1D", ["KD490", "ZSD"], False, OLCI),

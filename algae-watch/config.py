@@ -66,6 +66,20 @@ SITES = [
     {"name": "Hvalfjörður", "kind": "shellfish", "lat": 64.37, "lon": -21.60},
 ]
 SITES_ARE_PLACEHOLDERS = True
+
+# Hafró toxic-algae monitoring stations (voktun.hafro.is, 2005-2019), used as labels.
+# Coordinates are APPROXIMATE (named sampling places, not GPS).
+HAFRO_STATIONS = [
+    {"name": "Breiðafjörður (Kiðey)", "page": "breida", "kind": "hafro", "lat": 65.08, "lon": -22.72},
+    {"name": "Hvalfjörður (Eyrarkot)", "page": "hval", "kind": "hafro", "lat": 64.37, "lon": -21.62},
+    {"name": "Eyjafjörður", "page": "eyja", "kind": "hafro", "lat": 65.85, "lon": -18.20},
+    {"name": "Mjóifjörður eystri", "page": "mjoi", "kind": "hafro", "lat": 65.20, "lon": -13.80},
+    {"name": "Stakksfjörður", "page": "stakksfj", "kind": "hafro", "lat": 64.02, "lon": -22.45},
+    {"name": "Steingrímsfjörður", "page": "steing", "kind": "hafro", "lat": 65.72, "lon": -21.55},
+    {"name": "Þistilfjörður", "page": "thistil", "kind": "hafro", "lat": 66.20, "lon": -15.40},
+]
+# every point we extract time series for: farm sites + Hafró stations
+POINTS = SITES + HAFRO_STATIONS
 SITE_RADIUS_KM = 10
 
 # Bloom detection

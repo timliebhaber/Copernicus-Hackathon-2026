@@ -15,6 +15,7 @@
   --marker-ring: #fcfcfb;
   --critical: #d03b3b;
   --critical-wash: rgba(208, 59, 59, 0.16);
+  --cocco-wash: rgba(42, 120, 214, 0.16);
   --good: #0ca30c;
   --warning: #fab219;
 }
@@ -124,6 +125,7 @@ select, input[type=date] {
 .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px; margin-right: 4px; border: 2px solid var(--marker-ring); box-shadow: 0 0 0 1px var(--axis); }
 .dot.salmon { background: var(--series-1); }
 .dot.shellfish { background: var(--series-2); }
+.dot.hafro { background: var(--series-3); width: 10px; height: 10px; }
 .panelhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 12px; }
 
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
@@ -184,3 +186,4 @@ table.events tbody tr:hover { background: var(--page); }
 .conf.medium::before { content: "~ "; color: var(--warning); }
 .conf.low::before { content: "! "; color: var(--critical); }
 .nowrap { white-space: nowrap; }
+#panel[data-tab="blooms"] .kindkey .only-blooms { display: inline; }

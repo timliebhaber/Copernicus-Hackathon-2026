@@ -4,9 +4,12 @@
    config.BASELINE_YEARS.                                    -> data/processed/chl_clim.nc
 2. Bloom pixel: chl >= BLOOM_RATIO x climatology AND chl >= BLOOM_MIN_CHL.
    Site-day bloom: >= BLOOM_SITE_FRACTION of valid pixels around the site are bloom pixels.
-3. Events: consecutive bloom days (gaps <= 2 days), each labelled with
-   - type from the algae-group product + 555 nm reflectance (2016+),
-   - confidence from real observations (4 km L3 or 300 m) and water clarity.
+3. Events, two kinds:
+   - high-biomass: runs of bloom days. CONFIRMED only if it lasts >= 3 days, is seen on >= 1 clear
+     day by a real observation (4 km L3 or 300 m), and the water is not murky; else CANDIDATE.
+     Type (diatoms/haptophytes/dinoflagellates) is the satellite algae-group estimate (2016+).
+   - coccolithophore: milky water (555 nm reflectance >= 0.008 and >= 3x normal) on >= 2 clear
+     days. Chlorophyll alone misses these (checked on Hafró's Sep 2022 Westfjords bloom).
                                                               -> blooms.parquet, bloom_events.parquet
 4. Spring-bloom phenology (Zhai et al. 2012 style): shifted Gaussian fitted to each site's
    chlorophyll per year -> start, peak, duration, amplitude.  -> phenology.parquet
@@ -28,7 +31,14 @@ import common  # noqa: E402
 
 warnings.simplefilter("ignore", RuntimeWarning)
 CLIM_FILE = config.PROCESSED / "chl_clim.nc"
-TURBID_SECCHI_M = 5.0      # median Secchi depth below this -> murky water, low confidence
+TURBID_SECCHI_M = 5.0      # median Secchi depth below this -> murky water, chlorophyll unreliable
+MIN_EVENT_DAYS = 3         # a confirmed bloom lasts at least this long ...
+#                            ... and is seen on >= 1 clear day by a real (non gap-filled) observation
+COCCO_MIN_RRS555 = 0.008   # sr^-1, milky water (Hafró's Sep 2022 E. huxleyi bloom: 0.013-0.022)
+COCCO_RATIO = 3.0          # and >= 3x the site's normal 555 nm reflectance for that month
+COCCO_MONTHS = (5, 10)
+SPRING_DOY = (60, 196)          # 1 Mar - 15 Jul: window for the spring-bloom Gaussian fit
+SPRING_PEAK_MAX_DOY = 181       # spring-bloom peak must be before 30 Jun
 GROUPS = ["diatoms", "haptophytes", "dinoflagellates"]
 
 
@@ -78,7 +88,7 @@ def site_bloom_series(clim):
     for f in chl_files():
         ds = xr.open_dataset(f)
         if masks is None:
-            masks = {s["name"]: common.site_mask(ds, s) for s in config.SITES}
+            masks = {s["name"]: common.site_mask(ds, s) for s in config.POINTS}
         chl = ds["CHL"].values
         c = clim_lin[ds.time.dt.dayofyear.values - 1]
         ratio = chl / c
@@ -100,43 +110,98 @@ def site_bloom_series(clim):
 
 
 # ---------- 3. events ----------
+def group_runs(dates, max_gap):
+    """Group sorted dates into runs where consecutive dates are <= max_gap days apart."""
+    gap = dates.diff().dt.days.fillna(max_gap + 1) > max_gap
+    return gap.cumsum()
+
+
+def bloom_type(e):
+    """Dominant algae group from the satellite algae-group product (an estimate, not an ID)."""
+    if e.date.min().year < 2016:
+        return "unknown (before 2016)", {}
+    obs = e.dropna(subset=GROUPS)
+    total = obs[GROUPS].sum(axis=1)
+    obs = obs[total > 0]
+    if obs.empty:
+        return "unknown (cloudy)", {}
+    # share of each group among the three (same pixels, so they are comparable)
+    shares = {k: float((obs[k] / total[obs.index]).median()) for k in GROUPS}
+    best = max(shares, key=shares.get)
+    return (best if shares[best] >= 0.5 else "mixed"), shares
+
+
 def label_events(b, s):
-    df = b.merge(s, on=["site", "date"], how="left").sort_values(["site", "date"])
+    df = b.merge(s, on=["site", "date"], how="left").sort_values(["site", "date"]).reset_index(drop=True)
+    for c in ["chl_obs", "chl_300m", "rrs555", "secchi", "sst"] + GROUPS:  # streams not downloaded yet
+        if c not in df:
+            df[c] = np.nan
     df["chl_anomaly_ratio"] = df.chl / df.chl_clim
-    df["is_bloom"] = df.bloom_fraction >= config.BLOOM_SITE_FRACTION
-    # confirmation by a real (non gap-filled) observation, 4 km L3 or 300 m fjord
-    def confirmed(x):
+    df["candidate_bloom"] = df.bloom_fraction >= config.BLOOM_SITE_FRACTION
+
+    def confirmed(x):  # a real (not gap-filled) observation also shows the bloom
         return (x >= config.BLOOM_MIN_CHL) & (x >= config.BLOOM_RATIO * df.chl_clim)
     df["observed_bloom"] = confirmed(df.chl_obs) | confirmed(df.chl_300m)
 
     season = df[df.date.dt.month.between(3, 10)]
     secchi = season.groupby("site").secchi.median()
-    rrs_p95 = season.groupby("site").rrs555.quantile(0.95)
+    turbid = {k: v < TURBID_SECCHI_M for k, v in secchi.items()}
 
-    events = []
-    for site, g in df[df.is_bloom].groupby("site"):
-        gap = g.date.diff().dt.days.fillna(99) > 3
-        for _, e in g.groupby(gap.cumsum()):
-            obs = e[e.chl_obs.notna()]
-            shares = {k: (obs[k] / obs.chl_obs).mean() for k in GROUPS} if len(obs) else {}
-            if e.date.min().year < 2016 or not shares or all(pd.isna(v) for v in shares.values()):
-                btype = "unknown (before 2016 / no clear-sky data)" if e.date.min().year < 2016 else "unknown (cloudy)"
-            else:
-                btype = max(shares, key=lambda k: -1 if pd.isna(shares[k]) else shares[k])
-                if e.rrs555.max() >= rrs_p95.get(site, np.inf) and btype == "haptophytes":
-                    btype = "coccolithophores (milky water)"
+    # coccolithophore days: milky water, 555 nm reflectance far above the site's normal for that
+    # month. May-Oct only: E. huxleyi blooms follow the spring diatom bloom, and March/April
+    # reflectance at 65N is unreliable (low sun).
+    month = df.date.dt.month
+    rrs_normal = df.groupby(["site", month]).rrs555.transform("median")
+    df["rrs555_ratio"] = df.rrs555 / rrs_normal
+    df["cocco_day"] = (month.between(*COCCO_MONTHS) & (df.rrs555 >= COCCO_MIN_RRS555) &
+                       (df.rrs555_ratio >= COCCO_RATIO) &
+                       ~df.site.map(turbid).fillna(False).astype(bool))
+
+    events, df["is_bloom"], df["is_cocco"] = [], False, False
+    # --- high-biomass (chlorophyll) events ---
+    for site, g in df[df.candidate_bloom].groupby("site"):
+        for _, e in g.groupby(group_runs(g.date, 3)):
+            days = int((e.date.max() - e.date.min()).days + 1)
             n_obs = int(e.observed_bloom.sum())
-            turbid = secchi.get(site, np.inf) < TURBID_SECCHI_M
-            conf = "low (murky water)" if turbid else ("high" if n_obs > 0 else "medium (gap-filled only)")
+            reasons = []
+            if days < MIN_EVENT_DAYS:
+                reasons.append(f"short (<{MIN_EVENT_DAYS} days)")
+            if n_obs == 0:
+                reasons.append("not seen on a clear day")
+            if turbid.get(site, False):
+                reasons.append("murky water")
+            status = "confirmed" if not reasons else "candidate"
+            if status == "confirmed":
+                df.loc[e.index, "is_bloom"] = True
+            btype, shares = bloom_type(e)
             events.append({
-                "site": site, "start": e.date.min(), "end": e.date.max(),
-                "days": int((e.date.max() - e.date.min()).days + 1),
+                "site": site, "kind": "high-biomass", "start": e.date.min(), "end": e.date.max(), "days": days,
                 "peak_chl": float(e.chl.max()), "peak_ratio": float(e.chl_anomaly_ratio.max()),
-                "peak_date": e.loc[e.chl.idxmax(), "date"],
-                "mean_bloom_fraction": float(e.bloom_fraction.mean()),
-                "observed_days": n_obs, "type": btype, "confidence": conf,
-                "sst_mean": float(e.sst.mean()), "sst_anomaly_hint": None,
-                **{f"share_{k}": (None if pd.isna(v) else float(v)) for k, v in shares.items()},
+                "peak_date": e.loc[e.chl.idxmax(), "date"], "observed_days": n_obs,
+                "mean_bloom_fraction": float(e.bloom_fraction.mean()), "type": btype,
+                "status": status, "reason": ", ".join(reasons) or "lasted ≥3 days and seen on a clear day",
+                "confidence": "high" if status == "confirmed" else "candidate",
+                "sst_mean": float(e.sst.mean()),
+                **{f"share_{k}": v for k, v in shares.items()},
+            })
+    # --- coccolithophore (milky water) events ---
+    for site, g in df[df.cocco_day].groupby("site"):
+        for _, e in g.groupby(group_runs(g.date, 7)):  # cloudy gaps of up to a week
+            n_obs = len(e)
+            status = "confirmed" if n_obs >= 2 else "candidate"
+            if status == "confirmed":
+                span = df[(df.site == site) & df.date.between(e.date.min(), e.date.max())].index
+                df.loc[span, "is_cocco"] = True
+            events.append({
+                "site": site, "kind": "coccolithophore", "start": e.date.min(), "end": e.date.max(),
+                "days": int((e.date.max() - e.date.min()).days + 1), "peak_chl": float(e.chl.max()),
+                "peak_ratio": float(e.rrs555_ratio.max()),
+                "peak_date": e.loc[e.rrs555.idxmax(), "date"], "observed_days": n_obs,
+                "mean_bloom_fraction": None, "type": "coccolithophores (milky water)",
+                "status": status,
+                "reason": "milky water on ≥2 clear days" if status == "confirmed" else "milky water on 1 clear day only",
+                "confidence": "high" if status == "confirmed" else "candidate",
+                "sst_mean": float(e.sst.mean()),
             })
     return df, pd.DataFrame(events)
 
@@ -149,24 +214,25 @@ def gauss(t, b0, beta, h, tm, sigma):
 def fit_phenology(df):
     """Fit on an 8-day running median (as in 8-day composites), reject fits stuck at a bound."""
     out = []
-    lo_b, hi_b = [0, -0.05, 0, 60, 6], [np.inf, 0.05, np.inf, 230, 60]
+    # spring bloom only: fit Mar-mid Jul, peak must fall Mar-Jun (later peaks are summer blooms)
+    lo_b, hi_b = [0, -0.05, 0, SPRING_DOY[0], 6], [np.inf, 0.05, np.inf, SPRING_PEAK_MAX_DOY, 45]
     for (site, year), g in df.groupby([df.site, df.date.dt.year]):
-        g = g[(g.date.dt.dayofyear >= 60) & (g.date.dt.dayofyear <= 250)].dropna(subset=["chl"])
-        if len(g) < 100:
+        g = g[g.date.dt.dayofyear.between(*SPRING_DOY)].dropna(subset=["chl"])
+        if len(g) < 80:
             continue
         t = g.date.dt.dayofyear.values.astype(float)
         y = pd.Series(g.chl.values).rolling(8, center=True, min_periods=4).median().values
         ok = np.isfinite(y)
         t, y = t[ok], y[ok]
         base = np.nanpercentile(y, 10)
-        i = np.argmax(np.where(t <= 210, y, -np.inf))
+        i = np.argmax(np.where(t <= SPRING_PEAK_MAX_DOY, y, -np.inf))
         p0 = [base, 0, (y[i] - base) * 20 * 2.5, t[i], 20]
         try:
             p, _ = curve_fit(gauss, t, y, p0=p0, maxfev=20000, bounds=(lo_b, hi_b))
         except (RuntimeError, ValueError):
             continue
         b0, beta, h, tm, sigma = p
-        if sigma < lo_b[4] * 1.05 or sigma > hi_b[4] * 0.95 or tm < 62 or tm > 228:
+        if sigma < lo_b[4] * 1.05 or sigma > hi_b[4] * 0.95 or tm < lo_b[3] + 2 or tm > hi_b[3] - 2:
             continue  # stuck at a bound: not a real spring bloom shape
         pred = gauss(t, *p)
         r2 = 1 - np.sum((y - pred) ** 2) / np.sum((y - y.mean()) ** 2)
@@ -190,25 +256,27 @@ def main():
     df, ev = label_events(b, s)
 
     keep = ["date", "site", "chl", "chl_clim", "chl_anomaly_ratio", "bloom_fraction", "valid_fraction",
-            "is_bloom", "observed_bloom"]
+            "candidate_bloom", "is_bloom", "observed_bloom", "cocco_day", "is_cocco"]
     df[keep].to_parquet(config.PROCESSED / "blooms.parquet", index=False)
     ev.to_parquet(config.PROCESSED / "bloom_events.parquet", index=False)
     ph = fit_phenology(df)
     ph.to_parquet(config.PROCESSED / "phenology.parquet", index=False)
 
     # ---- report ----
-    print(f"\nbloom site-days: {int(df.is_bloom.sum())} of {int(df.chl.notna().sum())} with data")
+    print(f"\ncandidate bloom site-days: {int(df.candidate_bloom.sum())}, in confirmed events: "
+          f"{int(df.is_bloom.sum())}, coccolithophore days: {int(df.is_cocco.sum())} "
+          f"(of {int(df.chl.notna().sum())} site-days with data)")
     print("\nbloom days per month (all sites, all years):")
     m = df[df.is_bloom].groupby(df.date.dt.month).size()
     print("  " + "  ".join(f"{k}:{v}" for k, v in m.items()))
     print(f"\nevents: {len(ev)}")
     if len(ev):
-        print(ev.groupby("site").agg(events=("start", "size"), mean_days=("days", "mean"),
-                                     max_peak=("peak_chl", "max")).round(1).to_string())
-        print("\nby type (2016+):")
-        print(ev[ev.start.dt.year >= 2016].type.value_counts().to_string())
-        print("\nby confidence:")
-        print(ev.confidence.value_counts().to_string())
+        print(pd.crosstab([ev.site], [ev.kind, ev.status]).to_string())
+        conf = ev[ev.status == "confirmed"]
+        print("\nconfirmed high-biomass events by type (2016+):")
+        print(conf[(conf.kind == "high-biomass") & (conf.start.dt.year >= 2016)].type.value_counts().to_string())
+        print("\nwhy candidates were not confirmed:")
+        print(ev[ev.status == "candidate"].reason.value_counts().head(6).to_string())
     good = ph[ph.r2 > 0.3]
     print(f"\nphenology fits with r2>0.3: {len(good)} of {len(ph)}")
     print(good.groupby("site")[["start_doy", "peak_doy", "duration_days"]].median().round(0).to_string())
