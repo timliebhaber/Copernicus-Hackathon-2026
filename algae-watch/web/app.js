@@ -180,7 +180,7 @@ function updateOverlay() {
   if (has) {
     const url = `tiles/${key}/${S.date}.png`;
     if (!overlay) {
-      overlay = L.imageOverlay(url, L_.bounds, { opacity: 0.95, interactive: false }).addTo(map);
+      overlay = L.imageOverlay(url, L_.bounds, { opacity: 0.95, interactive: false, className: "fade-edge" }).addTo(map);
       overlay.on("load", () => grabPixels(overlay.getElement(), overlay._url));
     } else { overlay.setBounds(L.latLngBounds(L_.bounds)); overlay.setUrl(url); }
     overlay.setOpacity(0.95);
@@ -192,7 +192,7 @@ function updateOverlay() {
     const ok = showFjord && info.dateSet.has(S.date);
     const u = `tiles/chl300/${slug}/${S.date}.png`;
     if (ok) {
-      if (!fjordOverlays[slug]) fjordOverlays[slug] = L.imageOverlay(u, info.bounds, { interactive: false }).addTo(map);
+      if (!fjordOverlays[slug]) fjordOverlays[slug] = L.imageOverlay(u, info.bounds, { interactive: false, className: "fade-edge fade-small" }).addTo(map);
       else fjordOverlays[slug].setUrl(u).setOpacity(1);
     } else if (fjordOverlays[slug]) fjordOverlays[slug].setOpacity(0);
   }

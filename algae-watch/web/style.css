@@ -34,6 +34,17 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .leaflet-control-attribution { background: rgba(16, 22, 30, 0.6) !important; color: var(--muted) !important; font-size: 10px; border-radius: 6px 0 0 0; }
 .leaflet-control-attribution a { color: var(--text-2) !important; }
 .leaflet-image-layer { transition: opacity 0.25s ease; }
+/* soft edges: the data fades out instead of ending in a hard box */
+.fade-edge {
+  --f: 9%;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent),
+                      linear-gradient(to bottom, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent),
+              linear-gradient(to bottom, transparent, #000 var(--f), #000 calc(100% - var(--f)), transparent);
+  mask-composite: intersect;
+}
+.fade-edge.fade-small { --f: 14%; }
 
 .glass {
   background: var(--glass);
