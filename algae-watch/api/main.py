@@ -312,6 +312,8 @@ def confidence():
                     ("toxic", config.DATA / "models" / "toxic_metrics.json"),
                     ("validation", config.PROCESSED / "validation.json")]:
         m[name] = json.loads(f.read_text()) if f.exists() else None
+    f = config.DATA / "models" / "pixel_metrics.json"
+    m["pixel"] = json.loads(f.read_text()) if f.exists() else None
     m["calibration"] = calibration()
     m["early_warning"] = early_warning()
     return m

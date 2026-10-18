@@ -42,6 +42,7 @@ const FMT = {
   chl: (v) => `${v.toFixed(v < 1 ? 2 : 1)} mg/m³`, chl_obs: (v) => `${v.toFixed(v < 1 ? 2 : 1)} mg/m³`,
   anomaly: (v) => `${v.toFixed(1)}× normal`, bloom: (v) => `${v.toFixed(1)}× normal`, sst: (v) => `${v.toFixed(1)} °C`,
   salinity: (v) => `${v.toFixed(2)} PSU`, mixed_layer: (v) => `${Math.round(v)} m deep`, currents: (v) => `${v.toFixed(2)} m/s`,
+  risk3: (v) => `${Math.round(v * 100)}% chance of a bloom`, risk7: (v) => `${Math.round(v * 100)}% chance of a bloom`,
   waves: (v) => `${v.toFixed(1)} m`, rrs555: (v) => `${v.toFixed(4)} sr⁻¹${v >= 0.008 ? " · milky" : ""}`,
 };
 const LEVEL_COLOR = { low: "var(--low)", medium: "var(--medium)", high: "var(--high)" };
@@ -134,12 +135,13 @@ function grabPixels(img, url) {
 const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 function pixelValue(key, lat, lon) {
   const L_ = S.cfg.layers[key];
-  if (!L_?.lut || pix.url !== `tiles/${key}/${S.date}.png` || !pix.data) return null;
+  if (!L_ || (!L_.lut && !L_.alpha) || pix.url !== `tiles/${key}/${S.date}.png` || !pix.data) return null;
   const [[s_, w_], [n_, e_]] = L_.bounds;
   const x = Math.floor(((lon - w_) / (e_ - w_)) * pix.w), y = Math.floor(((mercY(n_) - mercY(lat)) / (mercY(n_) - mercY(s_))) * pix.h);
   if (x < 0 || y < 0 || x >= pix.w || y >= pix.h) return null;
   const o = (y * pix.w + x) * 4, [r, g, b, a] = [pix.data[o], pix.data[o + 1], pix.data[o + 2], pix.data[o + 3]];
   if (a < 20) return null;
+  if (L_.alpha) { const A = L_.alpha; return Math.max(0, ((a - A.a0) / (A.a1 - A.a0)) * A.vmax); }   // the chance is encoded in the opacity
   let best = null, bd = Infinity;
   for (const [v, R2, G, B] of L_.lut) { const d = (R2 - r) ** 2 + (G - g) ** 2 + (B - b) ** 2; if (d < bd) { bd = d; best = v; } }
   return bd < 2500 ? best : null;
@@ -170,7 +172,7 @@ let polygons = null;
 function overlayKey() {
   if (S.mode === "data") return S.layer;
   if (S.mode === "past") return "bloom";
-  return null;
+  return `risk${S.horizon}`;   // forecast: predicted bloom chance over the whole sea
 }
 
 function updateOverlay() {
@@ -269,11 +271,20 @@ function updateMarkers() {
 function renderLegend(key, has) {
   const box = $("#legend");
   if (S.mode === "forecast") {
-    box.innerHTML = `<div class="lt"><span>Bloom risk, next ${S.horizon} days</span></div>
-      <div class="items"><span><i class="keydot" style="background:var(--high)"></i>High · over ${pct(S.cfg.risk.high)}</span>
+    const R_ = S.cfg.layers[`risk${S.horizon}`];
+    const has2 = R_ && S.layerDates[`risk${S.horizon}`]?.has(S.date);
+    const grad2 = R_ ? R_.stops.map((s_, i) => `${s_.c} ${(i / (R_.stops.length - 1)) * 100}%`).join(",") : "";
+    box.innerHTML = `${R_ ? `<div class="lt"><span>Predicted bloom, next ${S.horizon} days</span><span>chance</span></div>
+      <div class="bar" style="background:linear-gradient(90deg,${grad2})"></div>
+      <div class="ticks">${R_.ticks.filter((t) => t >= 0.2).map((t) => `<span style="left:${(t / R_.max) * 100}%">${Math.round(t * 100)}%</span>`).join("")}</div>
+      <div class="note2">Green = where a bloom is predicted, deeper green = more likely. Clear sea = under 5%.</div>
+      <div class="sep"></div>` : ""}
+      <div class="lt"><span>Farms</span></div>
+      <div class="items"><span><i class="keydot" style="background:var(--high)"></i>High risk · over ${pct(S.cfg.risk.high)}</span>
       <span><i class="keydot" style="background:var(--medium)"></i>Medium · ${pct(S.cfg.risk.low)}–${pct(S.cfg.risk.high)}</span>
       <span><i class="keydot" style="background:var(--low)"></i>Low · under ${pct(S.cfg.risk.low)}</span>
-      <span><i class="keydot" style="background:#8a95a3"></i>No forecast (no data)</span></div>`;
+      <span><i class="keydot" style="background:#8a95a3"></i>No forecast (no data)</span></div>
+      ${has2 ? "" : `<div class="nodata">No forecast map this day (polar night or no data).</div>`}`;
     return;
   }
   const L_ = S.cfg.layers[key];
@@ -652,7 +663,8 @@ function setLayer(k) {
 
 function setHorizon(h) {
   S.horizon = h;
-  updateMarkers(); renderLeft(); renderLegend(null, true);
+  updateOverlay();
+  updateMarkers(); renderLeft();
   if (S.farmData) renderCard();
 }
 
@@ -670,8 +682,8 @@ map.on("mousemove", (e) => {
     if (id === lastHover) return;
     lastHover = id;
     const v = pixelValue(key, lat, lng);
-    const title = key === "bloom" ? "Chlorophyll" : S.cfg.layers[key].title;
-    $("#cursorVal").textContent = v == null ? "" : `${title} ${FMT[key](v)}`;
+    const title = key === "bloom" ? "Chlorophyll" : key.startsWith("risk") ? "" : S.cfg.layers[key].title;
+    $("#cursorVal").textContent = v == null ? "" : `${title} ${FMT[key](v)}`.trim();
   }, 90);
 });
 map.on("mouseout", () => { $("#cursorVal").textContent = ""; });

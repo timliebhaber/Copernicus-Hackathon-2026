@@ -65,6 +65,20 @@ All gains are statistically significant. For brand-new blooms, precision is stil
 - **Replay:** `predict.py` makes **walk-forward** forecasts. Each year is predicted by a model trained only on earlier years, so the app's Forecast tab shows what the system would really have said on any day from 2005 to 2025, including the top 3 factors behind each forecast. Example: `python src/predict.py --date 2025-05-16`.
 - **Coordinates:** every table in `data/processed/` has `lat`, `lon` and `kind` columns. These are the site or station coordinates (approximate placeholders); values are averaged over the ocean pixels around each point.
 
+## Predicted-bloom map (`src/pixel_forecast.py`)
+The Forecast mode also draws, in green, **where blooms are predicted** over the whole sea, not only at farms: the chance of a bloom at every 4 km pixel in the next 3 or 7 days. Deeper green means more likely; clear sea means under 5%.
+- **Same bloom rule** as the farms (above the pixel's 95th percentile for the date, ≥ 2.5× normal, ≥ 3 mg/m³), applied per pixel.
+- **Inputs, all known on the day:** the latest real cloud-free view and how unusual it was, the share of nearby pixels in bloom (20 km), gap-filled chlorophyll delayed 5 days, place, season and the pixel's normal.
+- **Test (2019–2026, 312k random pixel-days):**
+
+| | Model | Persistence ("bloom seen in past week") | Season (pixel's rate for the month) |
+|---|---|---|---|
+| 3 days: ROC-AUC / PR-AUC | **0.86 / 0.34** | 0.64 / 0.16 | 0.68 / 0.07 |
+| 7 days: ROC-AUC / PR-AUC | **0.82 / 0.35** | 0.59 / 0.17 | 0.70 / 0.14 |
+
+- **Calibrated:** forecasts of 30–50% were followed by a bloom 34–35% of the time, and above 50% by 60–64%. For *new* blooms (none seen lately) ROC-AUC is 0.82 vs 0.69 for the season.
+- **Limit:** the main inputs are real clear-sky views, so the map is sharpest where and when the satellite has looked recently. The model was trained on 1998–2018, so 2019–2026 maps are out of sample. Only chlorophyll data is used (no temperature or weather), which keeps the map fast to build.
+
 ## Experiment: forecasting *new* blooms (`src/build_ring_features.py`, `src/train_onset.py`)
 - **Target:** a confirmed bloom **starts** at a farm within 3 or 7 days. Only farm-days with no bloom in the past week count (566k farm-days).
 - **New inputs:**

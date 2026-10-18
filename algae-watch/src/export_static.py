@@ -99,7 +99,7 @@ def export_config():
         c["years"] = [max(c["years"][0], YEARS[0]), min(c["years"][1], YEARS[1])]
     for k, L in c["layers"].items():
         L["dates"] = ranges([d for d in L["dates"] if keep(d)])
-        L["lut"] = lut(k) if k in make_tiles.LAYERS else None
+        L["lut"] = lut(k) if k in make_tiles.LAYERS else None   # risk layers carry their value in the opacity (L["alpha"])
     if c.get("chl300"):
         for site in c["chl300"]["sites"].values():
             site["dates"] = ranges([d for d in site["dates"] if keep(d)])

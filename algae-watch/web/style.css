@@ -225,6 +225,8 @@ body.card-open .legend { right: 396px; }
 .legend .ticks { position: relative; height: 16px; margin-top: 4px; font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .legend .ticks span { position: absolute; transform: translateX(-50%); }
 .legend .ticks span:first-child { transform: none; } .legend .ticks span:last-child { transform: translateX(-100%); }
+.legend .note2 { font-size: 11.5px; color: var(--text-2); margin-top: 6px; line-height: 1.35; }
+.legend .sep { height: 1px; background: var(--line); margin: 10px 0; }
 .legend .nodata { font-size: 11.5px; color: var(--medium); margin-top: 6px; }
 .legend .items { display: flex; flex-direction: column; gap: 7px; font-size: 12px; color: var(--text-2); }
 .legend .items span { display: flex; align-items: center; gap: 8px; }
