@@ -1,6 +1,6 @@
 # Aquagentic
 
-*(code folder: `algae-watch`)*
+*(code folder: `algae-watch`)* · **Live:** https://aquagentic.netlify.app (2024–2026, operator names hidden)
 
 An early-warning prototype for **algal blooms around Iceland**. It is built on Copernicus satellite and ocean-model data and aimed at salmon farms, shellfish growers and authorities (MAST, Hafró).
 
