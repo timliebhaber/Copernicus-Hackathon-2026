@@ -491,5 +491,11 @@ def value(layer: str, date: str, lat: float, lon: float):
     return {"value": clean_value(v)}
 
 
-app.mount("/tiles", StaticFiles(directory=TILES, check_dir=False), name="tiles")
-app.mount("/", StaticFiles(directory=config.WEB, html=True), name="web")
+# The web app reads the static export (site/, built by src/export_static.py); the /api routes above
+# stay available for exploring the data.
+SITE = ROOT / "site"
+if (SITE / "data").exists():
+    app.mount("/", StaticFiles(directory=SITE, html=True), name="site")
+else:
+    app.mount("/tiles", StaticFiles(directory=TILES, check_dir=False), name="tiles")
+    app.mount("/", StaticFiles(directory=config.WEB, html=True), name="web")

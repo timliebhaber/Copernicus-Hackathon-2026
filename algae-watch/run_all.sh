@@ -21,4 +21,5 @@ if [ "$ALGAE_PROFILE" = full ]; then
 fi
 $PY src/import_farms.py          # licensed farm sites (MAST register) for the map
 $PY src/make_tiles.py
-echo "== done. Start the app with:  ALGAE_PROFILE=$ALGAE_PROFILE .venv/bin/uvicorn api.main:app"
+$PY src/export_static.py          # static site in site/ (what Netlify serves)
+echo "== done. View it with:  python3 -m http.server 8000 -d site    (or deploy: npx netlify-cli deploy --dir site)"

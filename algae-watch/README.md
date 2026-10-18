@@ -157,6 +157,17 @@ Prefix each command with `ALGAE_PROFILE=sample` to work on the sample instead.
 .venv/bin/python src/data_quality.py                        # precision report (optional)
 ```
 
+## Publish (Netlify, static)
+The site is fully static: `src/export_static.py` writes `site/`, which holds the web app, small JSON files (config, farms, one file per farm, one day-status file per year) and the map tiles for March–October 2016–2026, about 40k files and 340 MB. It contains no raw data, no parquet tables, no MAST database, and no operator names or licence codes (`--keep-companies` keeps them for private use).
+```bash
+.venv/bin/python src/export_static.py
+python3 -m http.server 8000 -d site          # check locally
+npx netlify-cli login                        # once, opens the browser
+npx netlify-cli deploy --dir site            # preview URL
+npx netlify-cli deploy --dir site --prod     # publish
+```
+`netlify.toml` sets caching: tiles are immutable for a year, JSON for an hour. Redeploys upload only changed files.
+
 ## Run the app
 ```bash
 .venv/bin/uvicorn api.main:app --reload

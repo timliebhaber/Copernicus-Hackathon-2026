@@ -7,7 +7,9 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const pct = (x) => (x == null ? "–" : `${Math.round(x * 100)}%`);
-const api = (path) => fetch(path).then((r) => { if (!r.ok) throw new Error(`${path}: ${r.status}`); return r.json(); });
+const getJSON = (path) => fetch(path).then((r) => { if (!r.ok) throw new Error(`${path}: ${r.status}`); return r.json(); });
+const cache = {};
+const once = (key, fn) => (cache[key] ??= fn().catch((e) => { delete cache[key]; throw e; }));
 
 const S = {
   mode: "forecast", layer: "chl", horizon: 3, fjord: true,
@@ -77,6 +79,105 @@ const FMT = {
 };
 const LEVEL_COLOR = { low: "var(--low)", medium: "var(--medium)", high: "var(--high)" };
 
+// ---------------- static data (replaces the Python API) ----------------
+const expand = (rngs) => { const out = new Set(); for (const [a, b] of rngs || []) for (let d = a; d <= b; d = addDays(d, 1)) out.add(d); return out; };
+const level = (p) => (p == null ? null : p >= S.cfg.risk.high ? "high" : p >= S.cfg.risk.low ? "medium" : "low");
+const dayDiff = (a, b) => Math.round((new Date(b + "T00:00:00Z") - new Date(a + "T00:00:00Z")) / 864e5);
+const kmBetween = (a, b) => { const dy = (a.lat - b.lat) * 111.2, dx = (a.lon - b.lon) * 111.2 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180); return Math.hypot(dx, dy); };
+
+async function dayStatus(date) {
+  const Y = await once(`day${date.slice(0, 4)}`, () => getJSON(`data/day/${date.slice(0, 4)}.json`));
+  const i = Y.dates.indexOf(date), out = {};
+  if (i < 0) return out;
+  Y.farms.forEach((name, j) => {
+    const r3 = Y.r3[i][j], r7 = Y.r7[i][j];
+    out[name] = { bloom: Y.bloom[i][j] === "1", milky: Y.milky[i][j] === "1", data: Y.data[i][j] === "1", ratio: Y.ratio[i][j],
+                  risk_3d: r3, risk_7d: r7, level_3d: level(r3), level_7d: level(r7) };
+  });
+  return out;
+}
+
+async function farmDetails(name, date) {
+  const info = S.byName[name];
+  const F = await once(`farm${info.slug}`, () => getJSON(`data/farm/${info.slug}.json`));
+  const D = F.daily, R_ = S.cfg.rule, i = dayDiff(F.start, date);
+  const at = (k, j = i) => (j >= 0 && j < D[k].length ? D[k][j] : null);
+  const win = (k) => D[k].slice(Math.max(0, i - 60), i + 1);
+  const inputs = [["chl", "Chlorophyll", "chl", "mg/m³"], ["anomaly", "Vs normal", "ratio", "×"], ["sst", "Sea temperature", "sst", "°C"],
+    ["salinity", "Salinity", "sal", "PSU"], ["mixed_layer", "Surface layer", "mld", "m"], ["currents", "Currents", "cur", "m/s"],
+    ["waves", "Waves", "wav", "m"], ["wind", "Wind", "wind", "m/s"], ["sun", "Sunlight", "sun", "MJ/m²"]]
+    .map(([key, label, k, unit]) => ({ key, label, unit, value: at(k), spark: win(k) }));
+  const covering = F.events.filter((e) => e.start <= date && e.end >= date).sort((a, b) => (a.status === "confirmed" ? -1 : 1) - (b.status === "confirmed" ? -1 : 1));
+  const hb = covering.find((e) => e.kind === "high-biomass"), mk = covering.find((e) => e.kind === "coccolithophore");
+  // the bloom test: on the bloom's peak day if we are inside one (that is how it was found), otherwise today
+  const ref = hb ? dayDiff(F.start, hb.peak) : i;
+  const chl = at("chl", ref), thr = at("thr", ref), ratio = at("ratio", ref), frac = at("frac", ref);
+  const checks = chl == null ? null : { bloom: at("bloom") === 1, on: hb ? hb.peak : date, steps: [
+    { label: `Algae above ${R_.min_chl} mg/m³`, value: `${chl.toFixed(1)} mg/m³`, ok: chl >= R_.min_chl },
+    { label: `At least ${R_.ratio}× the normal level`, value: ratio != null ? `${ratio.toFixed(1)}× normal` : "–", ok: ratio != null && ratio >= R_.ratio },
+    { label: `Rarer than ${R_.percentile}% of days on this date (${R_.baseline[0]}–${R_.baseline[1]})`, value: thr != null ? `limit ${thr.toFixed(1)} mg/m³` : "–", ok: thr != null && chl >= thr },
+    { label: `Covers ≥${Math.round(R_.area * 100)}% of the sea within ${R_.radius_km} km`, value: frac != null ? `${Math.round(frac * 100)}%` : "–", ok: frac != null && frac >= R_.area },
+    { label: "Lasts at least 3 days", value: hb ? `${hb.days} days` : "–", ok: !!hb && hb.days >= 3 },
+    { label: "Seen by the satellite on a clear day", value: hb ? `${hb.obs} clear day${hb.obs === 1 ? "" : "s"}` : "–", ok: !!hb && hb.obs > 0 },
+  ] };
+  let milky_checks = null;
+  if (mk || at("cocco") === 1) {
+    const rrs = at("rrs"), normal = F.rrs_normal[+date.slice(5, 7) - 1], rr = rrs != null && normal ? rrs / normal : null;
+    milky_checks = { bloom: at("milky") === 1, steps: [
+      { label: "Very bright green light (≥ 0.008 sr⁻¹)", value: rrs != null ? rrs.toFixed(4) : "cloudy today", ok: rrs != null && rrs >= 0.008 },
+      { label: `At least 3× this farm's normal for ${fmtDay(date, { month: "long" })}`, value: rr ? `${rr.toFixed(1)}×` : "–", ok: !!rr && rr >= 3 },
+      { label: "Clear water, not muddy (Secchi ≥ 5 m)", value: F.secchi != null ? `${Math.round(F.secchi)} m` : "–", ok: F.secchi != null && F.secchi >= 5 },
+      { label: "In coccolithophore season (May–Oct)", value: fmtDay(date, { month: "long" }), ok: +date.slice(5, 7) >= 5 && +date.slice(5, 7) <= 10 },
+      { label: "Seen on at least 2 clear days", value: mk ? `${mk.obs} clear days` : "–", ok: !!mk && mk.obs >= 2 },
+    ] };
+  }
+  const c = covering[0];
+  const current = c ? { kind: c.kind, start: c.start, end: c.end, days: c.days, day: dayDiff(c.start, date) + 1, status: c.status,
+                        type: c.type, peak_chl: c.peak_chl, peak_ratio: c.peak_ratio } : null;
+  const history = F.events.filter((e) => e.status === "confirmed").sort((a, b) => (a.start < b.start ? 1 : -1))
+    .map((e) => ({ kind: e.kind, start: e.start, peak: e.peak, days: e.days, peak_chl: e.peak_chl, peak_ratio: e.peak_ratio, type: e.type }));
+  let forecast = null;
+  if (at("r3") != null) {
+    const lo = Math.max(0, i - 60), hi = Math.min(D.r3.length, i + 22);
+    forecast = { trained_until: F.trained_until[date.slice(0, 4)],
+      "3d": { risk: at("r3"), level: level(at("r3")), happened: at("b3") },
+      "7d": { risk: at("r7"), level: level(at("r7")), happened: at("b7") },
+      series: { date: Array.from({ length: hi - lo }, (_, k) => addDays(F.start, lo + k)), risk_3d: D.r3.slice(lo, hi),
+                risk_7d: D.r7.slice(lo, hi), bloom: D.bloom.slice(lo, hi).map((v) => v || 0) } };
+  }
+  let toxic = null;
+  if (info.kind === "shellfish") {
+    const st = (S.cfg.stations || []).map((x) => ({ ...x, km: Math.round(kmBetween(x, info) * 10) / 10 })).sort((a, b) => a.km - b.km)[0];
+    toxic = { month: S.cfg.toxic_by_month?.[+date.slice(5, 7)] || null, station: st || null };
+  }
+  return { info, date, inputs, checks, milky_checks, current, history, forecast, toxic };
+}
+
+// cursor read-out: read the tile pixel under the mouse and turn its colour back into a value
+const pix = { url: null, data: null, w: 0, h: 0 };
+function grabPixels(img, url) {
+  try {
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    Object.assign(pix, { url, data: ctx.getImageData(0, 0, c.width, c.height).data, w: c.width, h: c.height });
+  } catch { pix.url = null; }
+}
+const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+function pixelValue(key, lat, lon) {
+  const L_ = S.cfg.layers[key];
+  if (!L_?.lut || pix.url !== `tiles/${key}/${S.date}.png` || !pix.data) return null;
+  const [[s_, w_], [n_, e_]] = L_.bounds;
+  const x = Math.floor(((lon - w_) / (e_ - w_)) * pix.w), y = Math.floor(((mercY(n_) - mercY(lat)) / (mercY(n_) - mercY(s_))) * pix.h);
+  if (x < 0 || y < 0 || x >= pix.w || y >= pix.h) return null;
+  const o = (y * pix.w + x) * 4, [r, g, b, a] = [pix.data[o], pix.data[o + 1], pix.data[o + 2], pix.data[o + 3]];
+  if (a < 20) return null;
+  let best = null, bd = Infinity;
+  for (const [v, R2, G, B] of L_.lut) { const d = (R2 - r) ** 2 + (G - g) ** 2 + (B - b) ** 2; if (d < bd) { bd = d; best = v; } }
+  return bd < 2500 ? best : null;
+}
+
 // ---------------- dates ----------------
 const iso = (d) => d.toISOString().slice(0, 10);
 const seasonDays = (y) => { const out = []; for (let d = new Date(Date.UTC(y, 2, 1)); d <= new Date(Date.UTC(y, 9, 31)); d.setUTCDate(d.getUTCDate() + 1)) out.push(iso(d)); return out; };
@@ -110,17 +211,19 @@ function updateOverlay() {
   const L_ = key && S.cfg.layers[key];
   const has = L_ && S.layerDates[key]?.has(S.date);
   if (has) {
-    const url = `/tiles/${key}/${S.date}.png`;
-    if (!overlay) overlay = L.imageOverlay(url, L_.bounds, { opacity: 0.95, interactive: false }).addTo(map);
-    else { overlay.setBounds(L.latLngBounds(L_.bounds)); overlay.setUrl(url); }
+    const url = `tiles/${key}/${S.date}.png`;
+    if (!overlay) {
+      overlay = L.imageOverlay(url, L_.bounds, { opacity: 0.95, interactive: false }).addTo(map);
+      overlay.on("load", () => grabPixels(overlay.getElement(), overlay._url));
+    } else { overlay.setBounds(L.latLngBounds(L_.bounds)); overlay.setUrl(url); }
     overlay.setOpacity(0.95);
   } else if (overlay) overlay.setOpacity(0);
   // 300 m fjord detail on top of chlorophyll
   const F = S.cfg.chl300;
   const showFjord = S.mode === "data" && S.fjord && (key === "chl" || key === "chl_obs");
   for (const [slug, info] of Object.entries(F?.sites || {})) {
-    const ok = showFjord && info.dates.includes(S.date);
-    const u = `/tiles/chl300/${slug}/${S.date}.png`;
+    const ok = showFjord && info.dateSet.has(S.date);
+    const u = `tiles/chl300/${slug}/${S.date}.png`;
     if (ok) {
       if (!fjordOverlays[slug]) fjordOverlays[slug] = L.imageOverlay(u, info.bounds, { interactive: false }).addTo(map);
       else fjordOverlays[slug].setUrl(u).setOpacity(1);
@@ -133,7 +236,7 @@ function updateOverlay() {
 function preloadNext(key) {
   if (!key) return;
   const i = S.days.indexOf(S.date);
-  for (const d of S.days.slice(i + 1, i + 4)) if (S.layerDates[key]?.has(d)) new Image().src = `/tiles/${key}/${d}.png`;
+  for (const d of S.days.slice(i + 1, i + 4)) if (S.layerDates[key]?.has(d)) new Image().src = `tiles/${key}/${d}.png`;
 }
 
 // ---------------- farm markers ----------------
@@ -159,7 +262,7 @@ function farmTip(f) {
     : d.milky ? `<span style="color:var(--milky)">● Milky-water bloom</span>` : d.data ? "No bloom" : "No satellite data";
   if (S.mode === "forecast") line = d[`risk_${S.horizon}d`] != null
     ? `Bloom risk next ${S.horizon} days: <b style="color:${LEVEL_COLOR[d[`level_${S.horizon}d`]]}">${pct(d[`risk_${S.horizon}d`])}</b>` : "No forecast this day";
-  return `<b>${esc(f.farm)}</b><br><span class="m">${esc(f.company || "")} · ${esc(f.area)}</span>${line ? `<br>${line}` : ""}`;
+  return `<b>${esc(f.farm)}</b><br><span class="m">${[f.company, f.area].filter(Boolean).map(esc).join(" · ")}</span>${line ? `<br>${line}` : ""}`;
 }
 
 function drawFarms() {
@@ -334,7 +437,7 @@ async function openFarm(name, fly = false) {
 
 async function loadFarm() {
   if (!S.farm) return;
-  try { S.farmData = await api(`/api/farm?name=${encodeURIComponent(S.farm)}&date=${S.date}`); }
+  try { S.farmData = await farmDetails(S.farm, S.date); }
   catch { S.farmData = null; }
   renderCard();
 }
@@ -520,7 +623,7 @@ async function setYear(y, keepMonthDay = true) {
   y = Math.max(yrs[0], Math.min(yrs[1], y));
   const md = S.date ? S.date.slice(5) : "06-01";
   S.year = y;
-  try { S.timeline = await api(`/api/timeline?year=${y}`); } catch { S.timeline = null; }
+  try { S.timeline = await once(`tl${y}`, () => getJSON(`data/timeline/${y}.json`)); } catch { S.timeline = null; }
   buildTimebar();
   await setDate(`${y}-${keepMonthDay ? md : "06-01"}`);
 }
@@ -539,7 +642,7 @@ async function setDate(d) {
   $("#dateSub").textContent = d.slice(0, 4);
   updateOverlay();
   let day = {};
-  try { day = await api(`/api/day?date=${d}`); } catch { day = {}; }
+  try { day = await dayStatus(d); } catch { day = {}; }
   if (tok !== dateToken) return;
   S.prevDay = S.day; S.day = day;
   const by = S.timeline?.days.find((x) => x.date === d);
@@ -603,12 +706,9 @@ map.on("mousemove", (e) => {
     const id = `${key}|${S.date}|${lat.toFixed(2)}|${lng.toFixed(2)}`;
     if (id === lastHover) return;
     lastHover = id;
-    try {
-      const r = await api(`/api/value?layer=${key}&date=${S.date}&lat=${lat.toFixed(3)}&lon=${lng.toFixed(3)}`);
-      if (id !== lastHover) return;
-      const title = key === "bloom" ? "Chlorophyll" : S.cfg.layers[key].title;
-      $("#cursorVal").textContent = r.value == null ? "" : `${title} ${FMT[key](r.value)}`;
-    } catch { $("#cursorVal").textContent = ""; }
+    const v = pixelValue(key, lat, lng);
+    const title = key === "bloom" ? "Chlorophyll" : S.cfg.layers[key].title;
+    $("#cursorVal").textContent = v == null ? "" : `${title} ${FMT[key](v)}`;
   }, 90);
 });
 map.on("mouseout", () => { $("#cursorVal").textContent = ""; });
@@ -619,7 +719,7 @@ function initSearch() {
   let active = 0, items = [];
   const render = () => {
     const q = inp.value.trim().toLowerCase();
-    items = !q ? [] : S.farms.filter((f) => `${f.farm} ${f.company} ${f.area}`.toLowerCase().includes(q)).slice(0, 8);
+    items = !q ? [] : S.farms.filter((f) => `${f.farm} ${f.company || ""} ${f.area}`.toLowerCase().includes(q)).slice(0, 8);
     ul.innerHTML = items.map((f, i) => `<li class="${i === active ? "active" : ""}" data-i="${i}"><span>${esc(f.farm)}</span><span>${esc(f.area)}</span></li>`).join("");
     ul.classList.toggle("open", items.length > 0);
     $$("li", ul).forEach((li) => li.onmousedown = (e) => { e.preventDefault(); pick(+li.dataset.i); });
@@ -638,7 +738,7 @@ function initSearch() {
 // ---------------- how it works ----------------
 async function openHow() {
   const dlg = $("#how");
-  if (!S.conf) { try { S.conf = await api("/api/confidence"); } catch { S.conf = {}; } }
+  if (!S.conf) { try { S.conf = await getJSON("data/confidence.json"); } catch { S.conf = {}; } }
   const R = S.cfg.rule, C = S.conf, V = C.validation || {};
   const [y0, y1] = S.cfg.years ? [1998, S.cfg.years[1]] : [1998, 2026];
   const nSea = S.farms.filter((f) => f.kind === "sea").length, nShell = S.farms.length - nSea;
@@ -725,9 +825,10 @@ document.addEventListener("keydown", (e) => {
 
 // ---------------- boot ----------------
 (async function boot() {
-  [S.cfg, S.farms] = await Promise.all([api("/api/config"), api("/api/farms")]);
+  [S.cfg, S.farms] = await Promise.all([getJSON("data/config.json"), getJSON("data/farms.json")]);
   S.byName = Object.fromEntries(S.farms.map((f) => [f.name, f]));
-  for (const [k, v] of Object.entries(S.cfg.layers)) S.layerDates[k] = new Set(v.dates);
+  for (const [k, v] of Object.entries(S.cfg.layers)) S.layerDates[k] = expand(v.dates);
+  for (const site of Object.values(S.cfg.chl300?.sites || {})) site.dateSet = expand(site.dates);
   const q = new URLSearchParams(location.search);
   if (["data", "past", "forecast"].includes(q.get("mode"))) S.mode = q.get("mode");
   if (S.cfg.layers[q.get("layer")]) S.layer = q.get("layer");
@@ -739,7 +840,7 @@ document.addEventListener("keydown", (e) => {
   initSearch();
   const want = q.get("date");
   S.year = want ? +want.slice(0, 4) : S.cfg.years[1];
-  try { S.timeline = await api(`/api/timeline?year=${S.year}`); } catch { S.timeline = null; }
+  try { S.timeline = await once(`tl${S.year}`, () => getJSON(`data/timeline/${S.year}.json`)); } catch { S.timeline = null; }
   buildTimebar();
   let start = want;
   if (!start || !S.days.includes(start)) {   // open on the busiest day of the latest year
