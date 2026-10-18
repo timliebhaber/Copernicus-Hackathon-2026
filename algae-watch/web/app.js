@@ -1,4 +1,4 @@
-// AlgaeWatch Iceland: algal blooms at Iceland's licensed fish and shellfish farms.
+// Aquagentic: algal blooms at Iceland's licensed fish and shellfish farms.
 // Modes: Ocean data (one input on the map) · Past blooms (detected blooms, farms pulse when hit)
 //        · Forecast (bloom risk per farm, why, and how sure we are).
 "use strict";
@@ -839,7 +839,8 @@ document.addEventListener("keydown", (e) => {
   drawFarms();
   initSearch();
   const want = q.get("date");
-  S.year = want ? +want.slice(0, 4) : S.cfg.years[1];
+  const DEFAULT_YEAR = 2025;   // a year with many blooms: a good first view
+  S.year = want ? +want.slice(0, 4) : Math.min(Math.max(DEFAULT_YEAR, S.cfg.years[0]), S.cfg.years[1]);
   try { S.timeline = await once(`tl${S.year}`, () => getJSON(`data/timeline/${S.year}.json`)); } catch { S.timeline = null; }
   buildTimebar();
   let start = want;

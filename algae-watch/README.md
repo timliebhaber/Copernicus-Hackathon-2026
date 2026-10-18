@@ -1,4 +1,6 @@
-# AlgaeWatch Iceland
+# Aquagentic
+
+*(code folder: `algae-watch`)*
 
 An early-warning prototype for **algal blooms around Iceland**. It is built on Copernicus satellite and ocean-model data and aimed at salmon farms, shellfish growers and authorities (MAST, Hafró).
 

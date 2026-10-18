@@ -10,7 +10,7 @@ Writes <root>/site/:
   data/farm/<slug>.json                  one farm: daily inputs, bloom-test values, flags, forecast, events
   tiles/<layer>/<date>.png               map overlays, March-October only
 Nothing from data/raw, no parquet tables and no MAST database (operators' ID numbers) is published.
-Usage: python src/export_static.py [--keep-companies]
+Usage: python src/export_static.py [--years 2024-2026] [--keep-companies]
 """
 import argparse
 import json
@@ -86,14 +86,23 @@ def lut(key):
     return [[float(v), *[int(c * 255) for c in cm(x)[:3]]] for v, x in zip(np.ravel(vals), t)]
 
 
+YEARS = None   # (first, last) year range for the export, set from --years
+
+
+def keep(d):
+    return in_season(d) and (YEARS is None or YEARS[0] <= int(d[:4]) <= YEARS[1])
+
+
 def export_config():
     c = api.app_config()
+    if YEARS:
+        c["years"] = [max(c["years"][0], YEARS[0]), min(c["years"][1], YEARS[1])]
     for k, L in c["layers"].items():
-        L["dates"] = ranges([d for d in L["dates"] if in_season(d)])
+        L["dates"] = ranges([d for d in L["dates"] if keep(d)])
         L["lut"] = lut(k) if k in make_tiles.LAYERS else None
     if c.get("chl300"):
         for site in c["chl300"]["sites"].values():
-            site["dates"] = ranges([d for d in site["dates"] if in_season(d)])
+            site["dates"] = ranges([d for d in site["dates"] if keep(d)])
     t = api.toxic_table()
     c["toxic_by_month"] = api.toxic_by_month()
     stations = []
@@ -215,9 +224,15 @@ def link(a, b):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep-companies", action="store_true", help="keep operator names (private deployments only)")
+    ap.add_argument("--years", help="only these years, e.g. 2024-2026 (smaller, faster deploy)")
     a = ap.parse_args()
-    if (OUT / "data").exists():
-        shutil.rmtree(OUT / "data")
+    global YEARS
+    if a.years:
+        lo, hi = (int(x) for x in a.years.split("-"))
+        YEARS = (lo, hi)
+    for sub in ("data", "tiles"):   # rebuilt from scratch (tiles are hard links, cheap to recreate)
+        if (OUT / sub).exists():
+            shutil.rmtree(OUT / sub)
     OUT.mkdir(exist_ok=True)
     for fn in ["index.html", "app.js", "style.css"]:
         shutil.copy2(config.WEB / fn, OUT / fn)

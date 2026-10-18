@@ -219,7 +219,8 @@ body.card-open .legend { right: 396px; }
 .legend .items span { display: flex; align-items: center; gap: 8px; }
 
 /* ---------- time bar ---------- */
-.timebar { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 1000; height: 80px; display: grid; grid-template-columns: auto 160px 1fr auto; gap: 18px; align-items: center; padding: 0 16px; }
+/* right gap keeps the year control clear of the host's corner badge (e.g. "Powered by Netlify") */
+.timebar { position: fixed; left: 16px; right: 200px; bottom: 16px; z-index: 1000; height: 80px; display: grid; grid-template-columns: auto 160px 1fr auto; gap: 18px; align-items: center; padding: 0 16px; }
 .tcontrols { display: flex; align-items: center; gap: 4px; }
 .tcontrols button, .tyear button { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: var(--text-2); }
 .tcontrols button:hover, .tyear button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
@@ -361,10 +362,10 @@ dialog#how .close { position: absolute; top: 18px; right: 18px; width: 34px; hei
   .modes button svg { display: none; }
   .search { top: 64px; left: 12px; right: 12px; width: auto; }
   .rail { display: none; }
-  .left { top: auto; left: 12px; right: 12px; bottom: 104px; width: auto; max-height: 34vh; }
+  .left { top: auto; left: 12px; right: 12px; bottom: 152px; width: auto; max-height: 34vh; }
   .card { top: 116px; left: 12px; right: 12px; max-height: calc(100vh - 230px); width: auto; }
   .legend { display: none; }
-  .timebar { left: 12px; right: 12px; bottom: 12px; grid-template-columns: auto 1fr; height: auto; padding: 10px 12px; gap: 6px 12px; }
+  .timebar { left: 12px; right: 12px; bottom: 60px; grid-template-columns: auto 1fr; height: auto; padding: 10px 12px; gap: 6px 12px; }
   .track { grid-column: 1 / -1; } .tyear { display: none; }
   body.card-open .left { display: none; }
 }
