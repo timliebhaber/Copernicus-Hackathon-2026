@@ -37,39 +37,6 @@ const ICONS = {
   sat: '<path d="M13 7l4 4M5 15l4 4M9.5 10.5l4 4"/><rect x="9" y="7.5" width="5" height="9" rx="1" transform="rotate(45 11.5 12)"/><path d="M17 3a4 4 0 0 1 4 4M16.5 5.5a1.5 1.5 0 0 1 2 2"/>',
 };
 
-// ---------------- algae guide ----------------
-const AFFECTS = { fish: ["fish", "Salmon farms"], shellfish: ["shell", "Shellfish"], people: ["person", "People (eating shellfish)"], lakes: ["lake", "Lakes"] };
-const SPACE = { yes: "Seen from space", partly: "Partly seen from space", no: "Not visible from space" };
-const ALGAE = [
-  { name: "Spring diatoms", sci: "Skeletonema, Chaetoceros", c: "#30d158", toxin: "No toxin", tox: "ok", affects: [], space: "yes",
-    effect: "The natural yearly bloom. Usually harmless.", iceland: "Every spring, peak around early June." },
-  { name: "Fish-killing flagellates", sci: "Chrysochromulina, Phaeocystis", c: "#ff453a", toxin: "Gill damage", tox: "bad", affects: ["fish"], space: "partly",
-    effect: "Damage gills or lower oxygen; can kill farmed salmon.", iceland: "Salmon losses reported in spring 2021." },
-  { name: "Coccolithophores", sci: "Emiliania huxleyi", c: "#64d2ff", toxin: "No toxin", tox: "ok", affects: [], space: "yes",
-    effect: "Turn the sea milky turquoise. Harmless.", iceland: "Every summer; Westfjords, Sept 2022." },
-  { name: "Dinophysis", sci: "D. acuminata, D. norvegica", c: "#ff9f0a", toxin: "DSP", tox: "bad", affects: ["shellfish", "people"], space: "no",
-    effect: "Mussels store the toxin; causes diarrhoea in people.", iceland: "Most common cause of mussel warnings." },
-  { name: "Alexandrium", sci: "A. tamarense, A. ostenfeldii", c: "#ff375f", toxin: "PSP", tox: "bad", affects: ["shellfish", "people"], space: "no",
-    effect: "Nerve toxin in mussels and scallops; can paralyse.", iceland: "Above the limit most summers." },
-  { name: "Pseudo-nitzschia", sci: "P. seriata, P. delicatissima", c: "#bf5af2", toxin: "ASP", tox: "bad", affects: ["shellfish"], space: "no",
-    effect: "Can make domoic acid (memory loss).", iceland: "Common, but the toxin was never found in Icelandic shellfish." },
-];
-
-function openGuide() {
-  const dlg = $("#guide");
-  $("#guideKey").innerHTML = Object.entries(AFFECTS).filter(([k]) => k !== "lakes").map(([, [k, t]]) => `<span>${icon(k)}${t}</span>`).join("") +
-    `<span>${icon("sat")}Seen from space?</span>`;
-  $("#guideCards").innerHTML = ALGAE.map((a) => `
-    <div class="alga" style="--c:${a.c}">
-      <div class="top"><h2>${a.name}</h2><span class="toxin ${a.tox}">${a.toxin}</span></div>
-      <div class="sci">${a.sci}</div>
-      <p>${a.effect}</p>
-      <div class="chips">${a.affects.map((k) => `<span class="tag aff" title="${AFFECTS[k][1]}">${icon(AFFECTS[k][0])}${AFFECTS[k][1].split(" (")[0]}</span>`).join("")}
-        <span class="tag space-${a.space}">${icon("sat")}From space: ${{ yes: "yes", partly: "partly", no: "no" }[a.space]}</span></div>
-      <div class="ice">🇮🇸 ${a.iceland}</div>
-    </div>`).join("");
-  dlg.showModal();
-}
 const icon = (k, cls = "") => `<svg viewBox="0 0 24 24" class="${cls}">${ICONS[k] || ""}</svg>`;
 const FMT = {
   chl: (v) => `${v.toFixed(v < 1 ? 2 : 1)} mg/m³`, chl_obs: (v) => `${v.toFixed(v < 1 ? 2 : 1)} mg/m³`,
@@ -385,8 +352,7 @@ function renderLeftPast(box) {
     ${busiest.length ? `<div class="section-title">Busiest days in ${S.year}${S.kindFilter === "all" ? "" : " · all farm types"}</div>
       <div class="list">${busiest.map((d) => `<button class="row" data-jump="${d.date}"><span class="t">${fmtShort(d.date)}</span>
         <span class="v" style="color:var(--bloom)">${d.bloom + d.milky} farms</span></button>`).join("")}</div>` : `<div class="empty-note">No blooms at farms in ${S.year}.</div>`}
-    <button class="linkbtn" data-how>How do we decide it's a bloom? →</button>
-    <button class="linkbtn" data-guide>Which algae, and what do they affect? →</button>`;
+    <button class="linkbtn" data-how>How do we decide it's a bloom? →</button>`;
   bindLeft(box);
 }
 
@@ -410,8 +376,7 @@ function renderLeftForecast(box) {
         <span class="riskbar"><i style="width:${Math.max(2, d[`risk_${h}d`] * 100)}%;background:${LEVEL_COLOR[d[`level_${h}d`]]}"></i></span>
         <span class="s">${esc(f.area)}</span></button>`).join("")}</div>
       ${rows.length > 14 ? `<p class="muted" style="margin:-6px 0 0;font-size:12px">+ ${rows.length - 14} more farms at lower risk</p>` : ""}`
-      : `<div class="empty-note">${+S.date.slice(5, 7) >= 11 || +S.date.slice(5, 7) <= 2 ? "No forecast in winter: satellites can't see the sea in the polar night." : "No forecast for this day."}</div>`}
-    <button class="linkbtn" data-guide>Which algae, and what do they affect? →</button>`;
+      : `<div class="empty-note">${+S.date.slice(5, 7) >= 11 || +S.date.slice(5, 7) <= 2 ? "No forecast in winter: satellites can't see the sea in the polar night." : "No forecast for this day."}</div>`}`;
   bindLeft(box);
 }
 
@@ -420,7 +385,6 @@ function bindLeft(box) {
   $$("[data-jump]", box).forEach((b) => b.onclick = () => setDate(b.dataset.jump));
   $$("[data-h]", box).forEach((b) => b.onclick = () => setHorizon(+b.dataset.h));
   $$("[data-how]", box).forEach((b) => b.onclick = openHow);
-  $$("[data-guide]", box).forEach((b) => b.onclick = openGuide);
   $$("[data-kind]", box).forEach((b) => b.onclick = () => setKind(b.dataset.kind));
 }
 
@@ -476,7 +440,6 @@ function renderCard() {
   $$("[data-h]", box).forEach((b) => b.onclick = () => setHorizon(+b.dataset.h));
   $$("[data-maplayer]", box).forEach((b) => b.onclick = () => setLayer(b.dataset.maplayer));
   $$("[data-how]", box).forEach((b) => b.onclick = openHow);
-  $$("[data-guide]", box).forEach((b) => b.onclick = openGuide);
 }
 
 function toxicNote(D) {
@@ -494,7 +457,7 @@ function toxicNote(D) {
       Last sample ${fmtShort(St.last_date)}: ${St.last_above ? "<b>above the limit</b>" : "below the limit"}.</div>
       <div class="months12">${St.months.map((v, i) => `<div class="${v == null ? "none" : ""} ${i === m0 ? "cur" : ""}" style="height:${v == null ? 6 : Math.max(4, (v / mx) * 100)}%" title="${v == null ? "no samples" : pct(v)}"></div>`).join("")}</div>
       <div class="mlabels">${["J","F","M","A","M","J","J","A","S","O","N","D"].map((x) => `<span>${x}</span>`).join("")}</div>` : ""}
-    <div class="st">Check MAST before harvesting. <button class="linkbtn" data-guide>Algae guide</button></div></div>`;
+    <div class="st">Check MAST before harvesting.</div></div>`;
 }
 
 function gauge(h, F) {
@@ -528,7 +491,7 @@ function cardPast(D) {
   if (C && C.status === "confirmed" && C.kind === "coccolithophore") status = `<div class="status milky"><div class="icon">${icon("rrs555")}</div><div>
     <div class="big">Milky-water bloom</div><div class="small">Coccolithophores · day ${C.day} of ${C.days} · started ${fmtShort(C.start)}</div></div></div>`;
   else if (C && C.status === "confirmed") status = `<div class="status bloom"><div class="icon">${icon("chl")}</div><div>
-    <div class="big">In a bloom · day ${C.day} of ${C.days}</div><div class="small">Peak ${C.peak_chl} mg/m³ (${C.peak_ratio}× normal) · <button class="linkbtn" data-guide>${esc(C.type)}</button></div></div></div>`;
+    <div class="big">In a bloom · day ${C.day} of ${C.days}</div><div class="small">Peak ${C.peak_chl} mg/m³ (${C.peak_ratio}× normal) · ${esc(C.type)}</div></div></div>`;
   else if (K) status = `<div class="status"><div class="icon">${icon("chl")}</div><div><div class="big">No bloom</div>
     <div class="small">${C ? "A bloom-like signal, but it didn't pass every check." : "Algae at normal levels for this time of year."}</div></div></div>`;
   else status = `<div class="status"><div class="icon">${icon("chl_obs")}</div><div><div class="big">No satellite data</div>
@@ -782,9 +745,6 @@ async function openHow() {
   dlg.showModal();
 }
 $("#howBtn").onclick = openHow;
-$("#guideBtn").onclick = openGuide;
-$("#guideClose").onclick = () => $("#guide").close();
-$("#guide").addEventListener("click", (e) => { if (e.target.id === "guide") e.target.close(); });
 $("#howClose").onclick = () => $("#how").close();
 $("#how").addEventListener("click", (e) => { if (e.target.id === "how") e.target.close(); });
 
@@ -816,7 +776,7 @@ $("#zoomOut").onclick = () => map.zoomOut();
 $("#home").onclick = () => map.flyToBounds(HOME, { duration: 0.8 });
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("#search").focus(); return; }
-  if (e.target.tagName === "INPUT" || $("#how").open || $("#guide").open) return;
+  if (e.target.tagName === "INPUT" || $("#how").open) return;
   if (e.key === "ArrowRight") step(1);
   if (e.key === "ArrowLeft") step(-1);
   if (e.key === " ") { e.preventDefault(); togglePlay(); }
@@ -851,6 +811,5 @@ document.addEventListener("keydown", (e) => {
   await setDate(start);
   if (q.get("farm") && S.byName[q.get("farm")]) openFarm(q.get("farm"));
   if (q.get("how")) openHow();
-  if (q.get("guide")) openGuide();
   if (["sea", "shellfish"].includes(q.get("kind"))) setKind(q.get("kind"));
 })();

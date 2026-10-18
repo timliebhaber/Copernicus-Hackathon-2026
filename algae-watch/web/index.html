@@ -27,8 +27,6 @@
     </nav>
     <button class="glass pillbtn" id="howBtn">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1.1.9-1.1 1.6v.5"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg><span>How it works</span></button>
-    <button class="glass pillbtn" id="guideBtn">
-      <svg viewBox="0 0 24 24"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="8" r="2"/><circle cx="14.5" cy="16" r="3.5"/><circle cx="6.5" cy="17" r="1.5"/></svg><span>Algae guide</span></button>
     <div class="cursor glass" id="cursor" aria-live="polite"><span id="cursorPos">Move over the sea</span><span id="cursorVal"></span></div>
   </header>
 
@@ -85,16 +83,6 @@
     <p class="lede">What we measure, when we call it a bloom, and how we checked it.</p>
     <div class="steps" id="howSteps"></div>
     <p class="fine">Prototype for a hackathon. A "bloom" here means a lot of algae (high biomass), seen as chlorophyll. Toxic species (Dinophysis, Alexandrium, Pseudo-nitzschia) are too few to see from space; only Hafró/MAST water samples can find them. Not for operational decisions. Data: Copernicus Marine, Open-Meteo (ERA5), Matvælastofnun (MAST farm register), Hafró.</p>
-  </dialog>
-
-  <!-- algae guide -->
-  <dialog id="guide" aria-labelledby="guideTitle">
-    <button class="close" id="guideClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-    <h1 id="guideTitle">Algae guide</h1>
-    <p class="lede">Which algae bloom in Iceland, what they harm, and whether satellites can see them.</p>
-    <div class="guidekey" id="guideKey"></div>
-    <div class="algae" id="guideCards"></div>
-    <p class="fine">The app sees the first three from space. The three toxin algae need water samples, so shellfish farms show Hafró's records instead. Fish-farm losses are reported events, not confirmed counts. Freshwater cyanobacteria (Mývatn) are outside this marine app.</p>
   </dialog>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>

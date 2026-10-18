@@ -16,7 +16,7 @@ Design: a full-screen ocean map with dark glass panels, a timeline with an activ
 
 > Prototype. The app detects **high-biomass blooms**, using satellite chlorophyll as the signal; it cannot measure toxicity. Toxic species (*Dinophysis*, *Alexandrium*, *Pseudo-nitzschia*) are only detected by Hafró/MAST water sampling. Shellfish farms show the typical monthly share of toxic Hafró samples instead. Do not use it for operational decisions.
 
-## Algae in Iceland (background; also the app's "Algae guide")
+## Algae in Iceland (background)
 | Group | Main genera | Effect | Affects | Seen from space? | Icelandic record |
 |---|---|---|---|---|---|
 | Spring diatoms | *Skeletonema, Chaetoceros, Thalassiosira* | Natural yearly bloom; dense or spiny blooms can irritate gills, and decay lowers oxygen | Salmon farms (rarely) | Yes | Every year; our median peak is early June |
